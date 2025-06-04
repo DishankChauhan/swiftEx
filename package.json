@@ -1,7 +1,7 @@
 {
-  "name": "crypto-exchange-backend",
+  "name": "swiftex-backend",
   "version": "1.0.0",
-  "description": "Centralized crypto spot exchange backend built with Bun",
+  "description": "swiftEx - Centralized crypto spot exchange backend built with Bun",
   "main": "src/index.ts",
   "type": "module",
   "scripts": {

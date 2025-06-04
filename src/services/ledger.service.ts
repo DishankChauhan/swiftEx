@@ -13,7 +13,7 @@ import type {
   Order,
   LedgerEntry
 } from '../types/ledger'
-import type { Prisma } from '@prisma/client'
+import type { Prisma, OrderStatus, LedgerEntryType } from '@prisma/client'
 
 export class LedgerService {
   // Asset Configuration Management
@@ -335,7 +335,7 @@ export class LedgerService {
   async getUserOrders(
     userId: string, 
     options: {
-      status?: string
+      status?: OrderStatus
       tradingPair?: string
       page?: number
       pageSize?: number
@@ -428,7 +428,7 @@ export class LedgerService {
     userId: string,
     options: {
       asset?: string
-      entryType?: string
+      entryType?: LedgerEntryType
       page?: number
       pageSize?: number
     } = {}

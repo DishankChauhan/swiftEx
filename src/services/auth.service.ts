@@ -37,7 +37,7 @@ export class AuthService {
       const user = await prisma.user.create({
         data: {
           email: data.email,
-          passwordHash
+          password: passwordHash
         }
       })
 
@@ -97,7 +97,7 @@ export class AuthService {
       }
 
       // Verify password
-      const isPasswordValid = await bcrypt.compare(data.password, user.passwordHash)
+      const isPasswordValid = await bcrypt.compare(data.password, user.password)
       if (!isPasswordValid) {
         return {
           success: false,
@@ -190,7 +190,7 @@ export class AuthService {
       // Save secret temporarily (will be confirmed when user verifies)
       await prisma.user.update({
         where: { id: userId },
-        data: { twoFASecret: secret }
+        data: { secret2FA: secret }
       })
 
       return {
@@ -216,7 +216,7 @@ export class AuthService {
         where: { id: userId }
       })
 
-      if (!user || !user.twoFASecret) {
+      if (!user || !user.secret2FA) {
         return {
           success: false,
           message: '2FA setup not initiated'
@@ -226,7 +226,7 @@ export class AuthService {
       // Verify token
       const isValid = authenticator.verify({
         token: data.token,
-        secret: user.twoFASecret
+        secret: user.secret2FA
       })
 
       if (!isValid) {
@@ -263,7 +263,7 @@ export class AuthService {
         where: { email: data.email }
       })
 
-      if (!user || !user.is2FAEnabled || !user.twoFASecret) {
+      if (!user || !user.is2FAEnabled || !user.secret2FA) {
         return {
           success: false,
           message: 'Invalid request'
@@ -271,7 +271,7 @@ export class AuthService {
       }
 
       // Verify password
-      const isPasswordValid = await bcrypt.compare(data.password, user.passwordHash)
+      const isPasswordValid = await bcrypt.compare(data.password, user.password)
       if (!isPasswordValid) {
         return {
           success: false,
@@ -282,7 +282,7 @@ export class AuthService {
       // Verify 2FA token
       const isTokenValid = authenticator.verify({
         token: data.token,
-        secret: user.twoFASecret
+        secret: user.secret2FA
       })
 
       if (!isTokenValid) {
@@ -343,7 +343,7 @@ export class AuthService {
         where: { id: userId }
       })
 
-      if (!user || !user.is2FAEnabled || !user.twoFASecret) {
+      if (!user || !user.is2FAEnabled || !user.secret2FA) {
         return {
           success: false,
           message: '2FA is not enabled'
@@ -353,7 +353,7 @@ export class AuthService {
       // Verify token
       const isValid = authenticator.verify({
         token: data.token,
-        secret: user.twoFASecret
+        secret: user.secret2FA
       })
 
       if (!isValid) {
@@ -368,7 +368,7 @@ export class AuthService {
         where: { id: userId },
         data: {
           is2FAEnabled: false,
-          twoFASecret: null
+          secret2FA: null
         }
       })
 

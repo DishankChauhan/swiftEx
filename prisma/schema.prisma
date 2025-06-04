@@ -7,12 +7,54 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Enums for type safety
+enum TransactionStatus {
+  pending
+  confirmed
+  failed
+  cancelled
+}
+
+enum OrderType {
+  market
+  limit
+  stop
+}
+
+enum OrderSide {
+  buy
+  sell
+}
+
+enum OrderStatus {
+  pending
+  partial
+  filled
+  cancelled
+  rejected
+}
+
+enum TimeInForce {
+  GTC  // Good Till Cancelled
+  IOC  // Immediate Or Cancel
+  FOK  // Fill Or Kill
+}
+
+enum LedgerEntryType {
+  deposit
+  withdrawal
+  trade
+  fee
+  lock
+  unlock
+}
+
 model User {
   id              String    @id @default(cuid())
   email           String    @unique
-  passwordHash    String
+  password        String
   is2FAEnabled    Boolean   @default(false)
-  twoFASecret     String?
+  secret2FA       String?
   kycStatus       String    @default("pending") // pending, approved, rejected
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -69,7 +111,7 @@ model Transaction {
   txHash      String?  @unique
   chain       String   // "solana" or "ethereum"
   txType      String   // "deposit", "withdrawal", "internal"
-  status      String   @default("pending") // pending, confirmed, failed, cancelled
+  status      TransactionStatus @default(pending) // pending, confirmed, failed, cancelled
   amount      String   // Using string to handle large numbers and decimals
   asset       String   // "SOL", "ETH", "USDC", etc.
   fromAddress String?
@@ -159,16 +201,16 @@ model Order {
   id            String   @id @default(cuid())
   userId        String
   tradingPair   String   // "SOL/USDC"
-  orderType     String   // "market", "limit", "stop"
-  side          String   // "buy", "sell"
+  orderType     OrderType   // "market", "limit", "stop"
+  side          OrderSide   // "buy", "sell"
   amount        String   // Order amount in base asset
   price         String?  // Order price (null for market orders)
   stopPrice     String?  // Stop price for stop orders
-  status        String   @default("pending") // pending, partial, filled, cancelled, rejected
+  status        OrderStatus @default(pending) // pending, partial, filled, cancelled, rejected
   filled        String   @default("0") // Amount filled
   remaining     String   // Amount remaining to fill
   averagePrice  String?  // Average fill price
-  timeInForce   String   @default("GTC") // GTC, IOC, FOK
+  timeInForce   TimeInForce @default(GTC) // GTC, IOC, FOK
   clientOrderId String?  // Client-provided order ID
   lockedAmount  String   // Amount locked for this order
   lockedAsset   String   // Asset locked (base for sell, quote for buy)
@@ -207,7 +249,7 @@ model LedgerEntry {
   userId        String
   orderId       String?  // Associated order (if applicable)
   transactionId String?  // Associated transaction (if applicable)
-  entryType     String   // "deposit", "withdrawal", "trade", "fee", "lock", "unlock"
+  entryType     LedgerEntryType   // "deposit", "withdrawal", "trade", "fee", "lock", "unlock"
   asset         String   // Asset affected
   amount        String   // Amount (positive for credit, negative for debit)
   balanceBefore String   // Balance before this entry
