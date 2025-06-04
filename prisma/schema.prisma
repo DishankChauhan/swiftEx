@@ -22,6 +22,8 @@ model User {
   wallets         Wallet[]
   transactions    Transaction[]
   balances        Balance[]
+  orders          Order[]
+  ledgerEntries   LedgerEntry[]
 
   @@map("users")
 }
@@ -84,6 +86,7 @@ model Transaction {
   // Relations
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   wallet      Wallet?  @relation(fields: [walletId], references: [id])
+  ledgerEntries LedgerEntry[]
 
   @@map("transactions")
 }
@@ -104,4 +107,119 @@ model Balance {
 
   @@unique([userId, asset, chain])
   @@map("balances")
+}
+
+// Phase 3: Internal Ledger System Models
+
+model AssetConfig {
+  id              String   @id @default(cuid())
+  symbol          String   @unique // "SOL", "ETH", "USDC"
+  name            String   // "Solana", "Ethereum", "USD Coin"
+  decimals        Int      // 9 for SOL, 18 for ETH, 6 for USDC
+  chain           String   // "solana" or "ethereum"
+  contractAddress String?  // For tokens (null for native assets)
+  isActive        Boolean  @default(true)
+  minDeposit      String   @default("0")
+  minWithdrawal   String   @default("0")
+  withdrawalFee   String   @default("0")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  baseAssetPairs  TradingPair[] @relation("BaseAsset")
+  quoteAssetPairs TradingPair[] @relation("QuoteAsset")
+
+  @@map("asset_configs")
+}
+
+model TradingPair {
+  id           String   @id @default(cuid())
+  symbol       String   @unique // "SOL/USDC", "ETH/USDC"
+  baseAsset    String   // "SOL", "ETH"
+  quoteAsset   String   // "USDC"
+  isActive     Boolean  @default(true)
+  minOrderSize String   // Minimum order size in base asset
+  maxOrderSize String   // Maximum order size in base asset
+  priceStep    String   // Minimum price increment
+  sizeStep     String   // Minimum size increment
+  makerFee     String   @default("0.001") // 0.1% maker fee
+  takerFee     String   @default("0.001") // 0.1% taker fee
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  baseAssetConfig  AssetConfig @relation("BaseAsset", fields: [baseAsset], references: [symbol])
+  quoteAssetConfig AssetConfig @relation("QuoteAsset", fields: [quoteAsset], references: [symbol])
+  orders           Order[]
+
+  @@map("trading_pairs")
+}
+
+model Order {
+  id            String   @id @default(cuid())
+  userId        String
+  tradingPair   String   // "SOL/USDC"
+  orderType     String   // "market", "limit", "stop"
+  side          String   // "buy", "sell"
+  amount        String   // Order amount in base asset
+  price         String?  // Order price (null for market orders)
+  stopPrice     String?  // Stop price for stop orders
+  status        String   @default("pending") // pending, partial, filled, cancelled, rejected
+  filled        String   @default("0") // Amount filled
+  remaining     String   // Amount remaining to fill
+  averagePrice  String?  // Average fill price
+  timeInForce   String   @default("GTC") // GTC, IOC, FOK
+  clientOrderId String?  // Client-provided order ID
+  lockedAmount  String   // Amount locked for this order
+  lockedAsset   String   // Asset locked (base for sell, quote for buy)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  filledAt      DateTime?
+  cancelledAt   DateTime?
+
+  // Relations
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tradingPairConfig TradingPair @relation(fields: [tradingPair], references: [symbol])
+  fills        OrderFill[]
+  ledgerEntries LedgerEntry[]
+
+  @@map("orders")
+}
+
+model OrderFill {
+  id         String   @id @default(cuid())
+  orderId    String
+  amount     String   // Amount filled
+  price      String   // Fill price
+  fee        String   // Fee charged
+  feeAsset   String   // Asset in which fee is charged
+  isMaker    Boolean  // True if this order was the maker
+  createdAt  DateTime @default(now())
+
+  // Relations
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("order_fills")
+}
+
+model LedgerEntry {
+  id            String   @id @default(cuid())
+  userId        String
+  orderId       String?  // Associated order (if applicable)
+  transactionId String?  // Associated transaction (if applicable)
+  entryType     String   // "deposit", "withdrawal", "trade", "fee", "lock", "unlock"
+  asset         String   // Asset affected
+  amount        String   // Amount (positive for credit, negative for debit)
+  balanceBefore String   // Balance before this entry
+  balanceAfter  String   // Balance after this entry
+  description   String?  // Human-readable description
+  metadata      Json?    // Additional metadata
+  createdAt     DateTime @default(now())
+
+  // Relations
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order        Order?       @relation(fields: [orderId], references: [id])
+  transaction  Transaction? @relation(fields: [transactionId], references: [id])
+
+  @@map("ledger_entries")
 } 
