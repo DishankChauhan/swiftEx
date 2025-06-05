@@ -10,6 +10,7 @@ import {
 } from '../types/matching'
 import { prisma } from '../config/database'
 import type { Order } from '../types/ledger'
+import { webSocketService } from './websocket.service'
 
 export class OrderBookService {
   /**
@@ -17,30 +18,30 @@ export class OrderBookService {
    * Uses sorted sets for efficient price-time priority
    */
   async addOrderToBook(order: Order): Promise<void> {
-    const key = order.side === 'buy' 
+    const price = parseFloat(order.price!)
+    const score = order.side === 'buy' ? -price : price // Negative for bids to sort DESC
+
+    const key = order.side === 'buy'
       ? REDIS_KEYS.orderBookBids(order.tradingPair)
       : REDIS_KEYS.orderBookAsks(order.tradingPair)
 
-    // For bids: higher price = higher score (descending order)
-    // For asks: lower price = higher score (ascending order)
-    const score = order.side === 'buy' 
-      ? parseFloat(order.price!) * 1000000 + (999999999 - new Date(order.createdAt).getTime())
-      : parseFloat(order.price!) * 1000000 + new Date(order.createdAt).getTime()
-
     const orderData = {
-      price: order.price!,
-      amount: order.remaining,
       orderId: order.id,
       userId: order.userId,
+      price: order.price!,
+      amount: order.remaining,
+      side: order.side,
       timestamp: order.createdAt.toISOString()
     }
 
-    // Add to sorted set and store order data
     await Promise.all([
       redis.zAdd(key, { score, value: order.id }),
       redis.hSet(REDIS_KEYS.order(order.id), orderData),
       redis.sAdd(REDIS_KEYS.userOrders(order.userId), order.id)
     ])
+
+    // Broadcast order book update to WebSocket subscribers
+    await this.broadcastOrderBookUpdate(order.tradingPair)
   }
 
   /**
@@ -63,6 +64,9 @@ export class OrderBookService {
       redis.del(REDIS_KEYS.order(orderId)),
       redis.sRem(REDIS_KEYS.userOrders(order.userId), orderId)
     ])
+
+    // Broadcast order book update to WebSocket subscribers
+    await this.broadcastOrderBookUpdate(order.tradingPair)
   }
 
   /**
@@ -70,7 +74,17 @@ export class OrderBookService {
    */
   async updateOrderInBook(orderId: string, newAmount: string): Promise<void> {
     const orderKey = REDIS_KEYS.order(orderId)
+    const orderData = await redis.hGetAll(orderKey)
+    
     await redis.hSet(orderKey, 'amount', newAmount)
+
+    // If we have the trading pair info, broadcast update
+    if (orderData.orderId) {
+      const order = await prisma.order.findUnique({ where: { id: orderId } })
+      if (order) {
+        await this.broadcastOrderBookUpdate(order.tradingPair)
+      }
+    }
   }
 
   /**
@@ -347,6 +361,23 @@ export class OrderBookService {
       askCount,
       spread,
       midPrice
+    }
+  }
+
+  /**
+   * Broadcast order book update via WebSocket
+   */
+  private async broadcastOrderBookUpdate(tradingPair: string): Promise<void> {
+    try {
+      // Get updated order book
+      const orderBook = await this.getOrderBook(tradingPair, 20)
+      
+      // Broadcast to WebSocket subscribers
+      await webSocketService.broadcastOrderBookUpdate(tradingPair, orderBook)
+      
+      console.log(`📡 Broadcasted order book update for ${tradingPair}`)
+    } catch (error) {
+      console.error(`Failed to broadcast order book update for ${tradingPair}:`, error)
     }
   }
 }

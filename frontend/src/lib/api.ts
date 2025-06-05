@@ -241,13 +241,14 @@ export class WebSocketClient {
       this.ws = new WebSocket(this.url)
 
       this.ws.onopen = () => {
-        console.log('WebSocket connected')
+        console.log('✅ WebSocket connected to SwiftEx')
         this.emit('connected', true)
       }
 
       this.ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data)
+          console.log('📦 WebSocket message received:', data)
           this.emit('message', data)
           
           // Emit specific event types
@@ -259,15 +260,14 @@ export class WebSocketClient {
         }
       }
 
-      this.ws.onclose = () => {
-        console.log('WebSocket disconnected')
+      this.ws.onclose = (event) => {
+        console.log('🔌 WebSocket disconnected:', event.code, event.reason)
         this.emit('disconnected', true)
         this.reconnect()
       }
 
       this.ws.onerror = (event) => {
-        // WebSocket error events often have empty error objects
-        console.log('WebSocket error event occurred')
+        console.error('❌ WebSocket error:', event)
         this.emit('error', event)
       }
     } catch (error) {
@@ -285,16 +285,25 @@ export class WebSocketClient {
 
   send(message: any) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      console.log('📤 Sending WebSocket message:', message)
       this.ws.send(JSON.stringify(message))
+    } else {
+      console.warn('WebSocket not connected, cannot send message:', message)
     }
   }
 
   subscribe(channel: string) {
-    this.send({ action: 'subscribe', channel })
+    this.send({ 
+      type: 'subscribe', 
+      data: { channels: [channel] }
+    })
   }
 
   unsubscribe(channel: string) {
-    this.send({ action: 'unsubscribe', channel })
+    this.send({ 
+      type: 'unsubscribe', 
+      data: { channels: [channel] }
+    })
   }
 
   on(event: string, callback: Function) {

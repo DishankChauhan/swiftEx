@@ -14,6 +14,7 @@ import type {
   LedgerEntry
 } from '../types/ledger'
 import type { Prisma, OrderStatus, LedgerEntryType } from '@prisma/client'
+import { orderBookService } from './orderbook.service'
 
 export class LedgerService {
   // Asset Configuration Management
@@ -26,9 +27,19 @@ export class LedgerService {
       throw new Error(`Asset ${data.symbol} already exists`)
     }
 
-    return await prisma.assetConfig.create({
-      data
+    const asset = await prisma.assetConfig.create({
+      data: {
+        symbol: data.symbol,
+        name: data.name,
+        decimals: data.decimals,
+        chain: data.chain,
+        contractAddress: data.contractAddress,
+        minDeposit: data.minDeposit || '0',
+        minWithdrawal: data.minWithdrawal || '0',
+        withdrawalFee: data.withdrawalFee || '0'
+      }
     })
+    return asset
   }
 
   async getAssetConfigs(activeOnly = true): Promise<AssetConfig[]> {
@@ -291,6 +302,9 @@ export class LedgerService {
         }
       })
 
+      // Add to Redis order book
+      await orderBookService.addOrderToBook(order)
+
       return order
     })
   }
@@ -327,6 +341,9 @@ export class LedgerService {
           cancelledAt: new Date()
         }
       })
+
+      // Remove from Redis order book
+      await orderBookService.removeOrderFromBook(orderId)
 
       return updatedOrder
     })

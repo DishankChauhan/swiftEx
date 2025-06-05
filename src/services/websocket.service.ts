@@ -318,6 +318,32 @@ export class WebSocketService {
   }
 
   /**
+   * Close all WebSocket connections (for graceful shutdown)
+   */
+  closeAllConnections(): void {
+    console.log(`🔌 Closing ${this.connections.size} WebSocket connections...`)
+    
+    for (const [connectionId, connection] of this.connections.entries()) {
+      try {
+        // Send goodbye message
+        connection.send(JSON.stringify({
+          type: 'goodbye',
+          data: { message: 'Server shutting down' },
+          timestamp: new Date().toISOString()
+        }))
+        
+        // Remove connection
+        this.removeConnection(connectionId)
+      } catch (error) {
+        console.error(`Error closing connection ${connectionId}:`, error)
+      }
+    }
+    
+    this.connections.clear()
+    console.log('✅ All WebSocket connections closed')
+  }
+
+  /**
    * Get connection statistics
    */
   getStats(): { totalConnections: number; totalSubscriptions: number } {

@@ -66,6 +66,7 @@ model User {
   balances        Balance[]
   orders          Order[]
   ledgerEntries   LedgerEntry[]
+  connectedWallets ConnectedWallet[]
 
   @@map("users")
 }
@@ -264,4 +265,21 @@ model LedgerEntry {
   transaction  Transaction? @relation(fields: [transactionId], references: [id])
 
   @@map("ledger_entries")
+}
+
+model ConnectedWallet {
+  id          String   @id @default(cuid())
+  userId      String
+  address     String   @unique
+  chain       String   // "solana" or "ethereum"
+  verified    Boolean  @default(false)
+  signature   String?  // Verification signature
+  connectedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("connected_wallets")
 } 
