@@ -2,6 +2,9 @@
 
 A high-performance centralized crypto spot exchange backend built with **Bun** and **Elysia.js**, inspired by Backpack.exchange.
 
+![swiftEx architecture](https://github.com/user-attachments/assets/8a00b65f-9d52-4c3a-a6d8-967cb178c8a6)
+
+
 ## 🎯 Completed Phases
 
 ### ✅ Phase 1 - Authentication & Core
