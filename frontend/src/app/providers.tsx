@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '@/lib/auth-context';
+import { WalletProvider } from '@/lib/wallet-context';
 import { Toaster } from 'sonner';
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -18,8 +19,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        {children}
-        <Toaster position="top-right" richColors />
+        <WalletProvider>
+          {children}
+          <Toaster position="top-right" richColors />
+        </WalletProvider>
       </AuthProvider>
     </QueryClientProvider>
   );

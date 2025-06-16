@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { walletApi, Balance } from '@/lib/api'
 import { toast } from 'sonner'
+import ExternalWalletConnect from '@/components/ExternalWalletConnect'
 
 // Balance card component
 function BalanceCard({ balance, showValue }: { balance: Balance; showValue: boolean }) {
@@ -303,6 +304,7 @@ function WithdrawModal({
 
 // Main wallet page
 export default function WalletPage() {
+  const [activeTab, setActiveTab] = useState('internal')
   const [showBalances, setShowBalances] = useState(true)
   const [depositModalOpen, setDepositModalOpen] = useState(false)
   const [withdrawModalOpen, setWithdrawModalOpen] = useState(false)
@@ -314,6 +316,40 @@ export default function WalletPage() {
     queryFn: () => walletApi.getBalances(),
     refetchInterval: 30000, // Refetch every 30 seconds
   })
+
+  // Listen for deposit events and trigger immediate balance refresh
+  useEffect(() => {
+    const handleWalletDeposit = (event: CustomEvent) => {
+      const { amount, chain, txHash } = event.detail
+      console.log(`Deposit detected: ${amount} ${chain.toUpperCase()}, refreshing balances...`)
+      
+      // Immediately refetch balances
+      refetch()
+      
+      // Show deposit notification
+      toast.success(`💰 Deposit detected: ${amount} ${chain.toUpperCase()}! Refreshing balances...`, {
+        duration: 5000
+      })
+      
+      // Continue polling for a few minutes to catch the balance update
+      const pollInterval = setInterval(() => {
+        refetch()
+      }, 5000) // Poll every 5 seconds
+      
+      // Stop polling after 2 minutes
+      setTimeout(() => {
+        clearInterval(pollInterval)
+      }, 120000)
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('walletDeposit', handleWalletDeposit as EventListener)
+      
+      return () => {
+        window.removeEventListener('walletDeposit', handleWalletDeposit as EventListener)
+      }
+    }
+  }, [refetch])
 
   const balances = balancesData?.data.data.balances || []
   const totalValue = balances.reduce((sum, balance) => sum + (parseFloat(balance.total) * 150), 0)
@@ -359,143 +395,177 @@ export default function WalletPage() {
         </div>
       </div>
 
-      {/* Portfolio Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-400 text-sm">Total Balance</p>
-              <p className="text-2xl font-bold text-white">
-                {showBalances ? `$${totalValue.toFixed(2)}` : '$••••••'}
-              </p>
-            </div>
-            <div className="w-12 h-12 bg-blue-600 rounded-full flex items-center justify-center">
-              <WalletIcon className="h-6 w-6 text-white" />
-            </div>
-          </div>
-          <div className="flex items-center mt-4 text-green-400">
-            <TrendingUp className="h-4 w-4 mr-1" />
-            <span className="text-sm">+12.5% (24h)</span>
-          </div>
-        </div>
-
-        <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-400 text-sm">Available Balance</p>
-              <p className="text-2xl font-bold text-white">
-                {showBalances ? 
-                  `$${balances.reduce((sum, b) => sum + (parseFloat(b.available) * 150), 0).toFixed(2)}` : 
-                  '$••••••'
-                }
-              </p>
-            </div>
-            <div className="w-12 h-12 bg-green-600 rounded-full flex items-center justify-center">
-              <Plus className="h-6 w-6 text-white" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-400 text-sm">Locked Balance</p>
-              <p className="text-2xl font-bold text-white">
-                {showBalances ? 
-                  `$${balances.reduce((sum, b) => sum + (parseFloat(b.locked) * 150), 0).toFixed(2)}` : 
-                  '$••••••'
-                }
-              </p>
-            </div>
-            <div className="w-12 h-12 bg-yellow-600 rounded-full flex items-center justify-center">
-              <Minus className="h-6 w-6 text-white" />
-            </div>
-          </div>
-        </div>
+      {/* Tab Navigation */}
+      <div className="border-b border-gray-700">
+        <nav className="flex space-x-8">
+          <button
+            onClick={() => setActiveTab('internal')}
+            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+              activeTab === 'internal'
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-gray-400 hover:text-gray-300'
+            }`}
+          >
+            Internal Wallets
+          </button>
+          <button
+            onClick={() => setActiveTab('external')}
+            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+              activeTab === 'external'
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-gray-400 hover:text-gray-300'
+            }`}
+          >
+            External Wallets
+          </button>
+        </nav>
       </div>
 
-      {/* Asset Balances */}
-      <div>
-        <h2 className="text-xl font-bold text-white mb-4">Your Assets</h2>
-        
-        {isLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[...Array(6)].map((_, i) => (
-              <div key={i} className="bg-gray-800 rounded-lg p-4 animate-pulse">
-                <div className="h-4 bg-gray-700 rounded mb-2"></div>
-                <div className="h-6 bg-gray-700 rounded"></div>
-              </div>
-            ))}
-          </div>
-        ) : balances.length === 0 ? (
-          <div className="bg-gray-800 rounded-lg p-8 text-center">
-            <WalletIcon className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-            <p className="text-gray-400">No assets found</p>
-            <p className="text-gray-500 text-sm">Make a deposit to get started</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {balances.map((balance) => (
-              <div key={`${balance.asset}-${balance.chain}`} className="relative group">
-                <BalanceCard balance={balance} showValue={showBalances} />
-                
-                {/* Action buttons overlay */}
-                <div className="absolute inset-0 bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-opacity duration-200 rounded-lg flex items-center justify-center space-x-4">
-                  <button
-                    onClick={() => openDepositModal(balance.asset)}
-                    className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2"
-                  >
-                    <Plus className="h-4 w-4" />
-                    <span>Deposit</span>
-                  </button>
-                  <button
-                    onClick={() => openWithdrawModal(balance.asset, balance.available)}
-                    className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2"
-                    disabled={parseFloat(balance.available) === 0}
-                  >
-                    <Minus className="h-4 w-4" />
-                    <span>Withdraw</span>
-                  </button>
+      {/* Tab Content */}
+      {activeTab === 'internal' ? (
+        <>
+          {/* Portfolio Overview */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-gray-400 text-sm">Total Balance</p>
+                  <p className="text-2xl font-bold text-white">
+                    {showBalances ? `$${totalValue.toFixed(2)}` : '$••••••'}
+                  </p>
+                </div>
+                <div className="w-12 h-12 bg-blue-600 rounded-full flex items-center justify-center">
+                  <WalletIcon className="h-6 w-6 text-white" />
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+              <div className="flex items-center mt-4 text-green-400">
+                <TrendingUp className="h-4 w-4 mr-1" />
+                <span className="text-sm">+12.5% (24h)</span>
+              </div>
+            </div>
 
-      {/* Recent Transactions */}
-      <div>
-        <h2 className="text-xl font-bold text-white mb-4">Recent Transactions</h2>
-        <div className="bg-gray-800 rounded-lg">
-          <div className="p-4 border-b border-gray-700">
-            <div className="grid grid-cols-5 gap-4 text-sm font-medium text-gray-400">
-              <div>Type</div>
-              <div>Asset</div>
-              <div>Amount</div>
-              <div>Status</div>
-              <div>Date</div>
+            <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-gray-400 text-sm">Available Balance</p>
+                  <p className="text-2xl font-bold text-white">
+                    {showBalances ? 
+                      `$${balances.reduce((sum, b) => sum + (parseFloat(b.available) * 150), 0).toFixed(2)}` : 
+                      '$••••••'
+                    }
+                  </p>
+                </div>
+                <div className="w-12 h-12 bg-green-600 rounded-full flex items-center justify-center">
+                  <Plus className="h-6 w-6 text-white" />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-gray-400 text-sm">Locked Balance</p>
+                  <p className="text-2xl font-bold text-white">
+                    {showBalances ? 
+                      `$${balances.reduce((sum, b) => sum + (parseFloat(b.locked) * 150), 0).toFixed(2)}` : 
+                      '$••••••'
+                    }
+                  </p>
+                </div>
+                <div className="w-12 h-12 bg-yellow-600 rounded-full flex items-center justify-center">
+                  <Minus className="h-6 w-6 text-white" />
+                </div>
+              </div>
             </div>
           </div>
-          <div className="p-8 text-center">
-            <p className="text-gray-400">No recent transactions</p>
-            <p className="text-gray-500 text-sm">Your transaction history will appear here</p>
-          </div>
-        </div>
-      </div>
 
-      {/* Modals */}
-      <DepositModal
-        isOpen={depositModalOpen}
-        onClose={() => setDepositModalOpen(false)}
-        selectedAsset={selectedAsset}
-      />
-      
-      <WithdrawModal
-        isOpen={withdrawModalOpen}
-        onClose={() => setWithdrawModalOpen(false)}
-        selectedAsset={selectedAsset}
-        availableBalance={selectedBalance}
-      />
+          {/* Asset Balances */}
+          <div>
+            <h2 className="text-xl font-bold text-white mb-4">Your Assets</h2>
+            
+            {isLoading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {[...Array(6)].map((_, i) => (
+                  <div key={i} className="bg-gray-800 rounded-lg p-4 animate-pulse">
+                    <div className="h-4 bg-gray-700 rounded mb-2"></div>
+                    <div className="h-6 bg-gray-700 rounded"></div>
+                  </div>
+                ))}
+              </div>
+            ) : balances.length === 0 ? (
+              <div className="bg-gray-800 rounded-lg p-8 text-center">
+                <WalletIcon className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                <p className="text-gray-400">No assets found</p>
+                <p className="text-gray-500 text-sm">Make a deposit to get started</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {balances.map((balance) => (
+                  <div key={`${balance.asset}-${balance.chain}`} className="relative group">
+                    <BalanceCard balance={balance} showValue={showBalances} />
+                    
+                    {/* Action buttons overlay */}
+                    <div className="absolute inset-0 bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-opacity duration-200 rounded-lg flex items-center justify-center space-x-4">
+                      <button
+                        onClick={() => openDepositModal(balance.asset)}
+                        className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2"
+                      >
+                        <Plus className="h-4 w-4" />
+                        <span>Deposit</span>
+                      </button>
+                      <button
+                        onClick={() => openWithdrawModal(balance.asset, balance.available)}
+                        className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2"
+                        disabled={parseFloat(balance.available) === 0}
+                      >
+                        <Minus className="h-4 w-4" />
+                        <span>Withdraw</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Recent Transactions */}
+          <div>
+            <h2 className="text-xl font-bold text-white mb-4">Recent Transactions</h2>
+            <div className="bg-gray-800 rounded-lg">
+              <div className="p-4 border-b border-gray-700">
+                <div className="grid grid-cols-5 gap-4 text-sm font-medium text-gray-400">
+                  <div>Type</div>
+                  <div>Asset</div>
+                  <div>Amount</div>
+                  <div>Status</div>
+                  <div>Date</div>
+                </div>
+              </div>
+              <div className="p-8 text-center">
+                <p className="text-gray-400">No recent transactions</p>
+                <p className="text-gray-500 text-sm">Your transaction history will appear here</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Modals */}
+          <DepositModal
+            isOpen={depositModalOpen}
+            onClose={() => setDepositModalOpen(false)}
+            selectedAsset={selectedAsset}
+          />
+          
+          <WithdrawModal
+            isOpen={withdrawModalOpen}
+            onClose={() => setWithdrawModalOpen(false)}
+            selectedAsset={selectedAsset}
+            availableBalance={selectedBalance}
+          />
+        </>
+      ) : (
+        /* External Wallets Tab */
+        <ExternalWalletConnect />
+      )}
     </div>
   )
 }

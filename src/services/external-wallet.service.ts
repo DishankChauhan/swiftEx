@@ -64,12 +64,19 @@ class ExternalWalletService {
     try {
       const publicKey = new PublicKey(address);
       
-      // Create message bytes
-      const messageBytes = new TextEncoder().encode(message);
+      // For development purposes, we'll accept the signature if the address matches
+      // In production, you'd implement proper ed25519 signature verification
+      console.log(`Verifying Solana signature for address: ${address}`);
+      console.log(`Message: ${message}`);
+      console.log(`Signature: ${signature}`);
       
-      // Verify signature (Note: This is a simplified version)
-      // In production, you'd use @solana/wallet-adapter for proper verification
-      return true; // Placeholder - implement proper signature verification
+      // Basic validation - check if address is valid Solana address
+      if (!PublicKey.isOnCurve(publicKey)) {
+        throw new Error('Invalid Solana public key');
+      }
+      
+      // For development/demo purposes, return true if we have a valid address and signature
+      return signature.length > 0 && address.length > 0;
     } catch (error) {
       console.error('Solana signature verification failed:', error);
       return false;
@@ -147,10 +154,10 @@ class ExternalWalletService {
   }
 
   /**
-   * Get user's deposit address for a specific chain
+   * Get deposit address for user, creating one if it doesn't exist
    */
   async getUserDepositAddress(userId: string, chain: 'solana' | 'ethereum'): Promise<string> {
-    const wallet = await prisma.wallet.findFirst({
+    let wallet = await prisma.wallet.findFirst({
       where: {
         userId,
         chain,
@@ -159,8 +166,22 @@ class ExternalWalletService {
       }
     });
 
+    // If no deposit wallet exists, create one using the wallet service
     if (!wallet) {
-      throw new Error(`No ${chain} deposit wallet found for user`);
+      console.log(`No ${chain} deposit wallet found for user ${userId}, creating one...`);
+      
+      // Import and create a wallet service instance
+      const { WalletService } = await import('./wallet.service.js');
+      const walletService = new WalletService();
+      
+      // Generate a deposit address
+      const result = await walletService.generateDepositAddress(userId, { chain });
+      
+      if (!result.success || !result.data?.address) {
+        throw new Error(`Failed to generate ${chain} deposit address for user`);
+      }
+      
+      return result.data.address;
     }
 
     return wallet.address;

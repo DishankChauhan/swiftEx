@@ -124,6 +124,14 @@ export interface CandleData {
   volume: string
 }
 
+export interface ConnectedWallet {
+  id: string
+  address: string
+  chain: 'solana' | 'ethereum'
+  verified: boolean
+  connectedAt: string
+}
+
 // Authentication API
 export const authApi = {
   register: (email: string, password: string) =>
@@ -164,6 +172,37 @@ export const walletApi = {
 
   getLiveBalance: (chain: string, address: string) =>
     apiClient.get(`/wallet/balance/live/${chain}/${address}`),
+}
+
+// External Wallet API
+export const externalWalletApi = {
+  generateChallenge: (address: string) =>
+    apiClient.post<{ success: boolean; data: { message: string } }>('/api/external-wallet/challenge', { address }),
+
+  connectWallet: (address: string, chain: 'solana' | 'ethereum', signature: string) =>
+    apiClient.post<{ success: boolean; data: ConnectedWallet }>('/api/external-wallet/connect', {
+      address,
+      chain,
+      signature
+    }),
+
+  getConnectedWallets: () =>
+    apiClient.get<{ success: boolean; data: ConnectedWallet[] }>('/api/external-wallet/connected'),
+
+  disconnectWallet: (address: string) =>
+    apiClient.delete<{ success: boolean; message: string }>('/api/external-wallet/disconnect', {
+      data: { address }
+    }),
+
+  getDepositAddress: (chain: 'solana' | 'ethereum') =>
+    apiClient.get<{ success: boolean; data: { address: string; chain: string } }>(`/api/external-wallet/deposit-address/${chain}`),
+
+  monitorDeposit: (chain: 'solana' | 'ethereum', userAddress: string, expectedAmount?: number) =>
+    apiClient.post<{ success: boolean; data: { monitorId: string } }>('/api/external-wallet/monitor-deposit', {
+      chain,
+      userAddress,
+      expectedAmount
+    }),
 }
 
 // Trading API
