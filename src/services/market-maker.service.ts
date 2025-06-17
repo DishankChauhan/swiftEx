@@ -30,6 +30,9 @@ interface MarketMakerConfig {
 }
 
 class MarketMakerService {
+  start() {
+    throw new Error('Method not implemented.');
+  }
   private config: Map<string, MarketMakerConfig> = new Map();
   private binancePrices: Map<string, number> = new Map();
   private marketMakerId: string = 'market-maker-bot';

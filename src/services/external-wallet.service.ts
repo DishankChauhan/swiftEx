@@ -23,16 +23,18 @@ class ExternalWalletService {
   private solanaConnection: Connection;
   private ethProvider: ethers.JsonRpcProvider;
   private depositMonitors: Map<string, DepositMonitor> = new Map();
+  private monitoringInterval?: NodeJS.Timeout;
 
   constructor() {
-    // Initialize blockchain connections
+    // Initialize Solana connection
     this.solanaConnection = new Connection(
-      process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com',
+      process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
       'confirmed'
     );
-    
+
+    // Initialize Ethereum provider
     this.ethProvider = new ethers.JsonRpcProvider(
-      process.env.ETHEREUM_RPC_URL || 'https://sepolia.infura.io/v3/your-project-id'
+      process.env.ETHEREUM_RPC_URL || 'https://mainnet.infura.io/v3/YOUR_PROJECT_ID'
     );
 
     // Start monitoring deposits
@@ -418,13 +420,29 @@ class ExternalWalletService {
    * Start deposit monitoring service
    */
   private startDepositMonitoring(): void {
+    // Clear existing interval if any
+    if (this.monitoringInterval) {
+      clearInterval(this.monitoringInterval);
+    }
+    
     // Check for deposits every 30 seconds
-    setInterval(async () => {
+    this.monitoringInterval = setInterval(async () => {
       await this.checkSolanaDeposits();
       await this.checkEthereumDeposits();
     }, 30000);
 
     console.log('Deposit monitoring service started');
+  }
+
+  /**
+   * Stop deposit monitoring service
+   */
+  stopDepositMonitoring(): void {
+    if (this.monitoringInterval) {
+      clearInterval(this.monitoringInterval);
+      this.monitoringInterval = undefined;
+      console.log('Deposit monitoring service stopped');
+    }
   }
 
   /**

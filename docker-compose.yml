@@ -1,15 +1,16 @@
 version: '3.8'
 
 services:
+  # Main PostgreSQL database
   postgres:
     image: postgres:15
     container_name: crypto_exchange_postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: crypto_exchange_db
+      POSTGRES_DB: swiftex
     ports:
-      - "5432:5432"
+      - "5435:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -18,6 +19,26 @@ services:
       timeout: 10s
       retries: 3
 
+  # TimescaleDB for time series data (market data, OHLCV)
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: crypto_exchange_timescaledb
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: timeseries
+    ports:
+      - "5434:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    command: ["postgres", "-c", "shared_preload_libraries=timescaledb"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis for order book and caching
   redis:
     image: redis:7-alpine
     container_name: crypto_exchange_redis
@@ -34,4 +55,5 @@ services:
 
 volumes:
   postgres_data:
+  timescale_data:
   redis_data: 

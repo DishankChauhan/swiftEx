@@ -2,6 +2,9 @@ import redis from '../config/redis'
 import { prisma } from '../config/database'
 
 class AnalyticsService {
+  start() {
+    throw new Error('Method not implemented.')
+  }
   private config: any = {
     enableHistoricalData: true,
     enableTechnicalIndicators: true,

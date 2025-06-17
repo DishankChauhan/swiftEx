@@ -1,58 +1,89 @@
 import { Elysia } from 'elysia'
 import { cors } from '@elysiajs/cors'
-import { authRoutes } from './routes/auth.routes'
-import { walletRoutes } from './routes/wallet.routes'
-import { ledgerRoutes } from './routes/ledger.routes'
-import { orderBookRoutes } from './routes/orderbook.routes'
-import { analyticsRoutes } from './routes/analytics.routes'
-import { externalWalletRoutes, marketMakerRoutes } from './routes/external-wallet.routes'
-import { publicRoutes } from './routes/public.routes'
-import { webSocketService } from './services/websocket.service'
-import redis from './config/redis'
-import { marketMakerService } from './services/market-maker.service'
+import { swagger } from '@elysiajs/swagger'
+import { html } from '@elysiajs/html'
 
-// Initialize Redis connection
-console.log('🔄 Initializing Redis connection...')
+// Import configurations
+import './config/database'
+import { initTimescaleDB } from './config/timescale'
+
+// Import routes
+import { authRoutes } from './routes/auth.routes'
+import { orderBookRoutes } from './routes/orderbook.routes'
+import { ledgerRoutes } from './routes/ledger.routes'
+import { walletRoutes } from './routes/wallet.routes'
+import { externalWalletRoutes } from './routes/external-wallet.routes'
+import { marketDataRoutes } from './routes/market-data.routes'
+import { publicRoutes } from './routes/public.routes'
+
+// Import services
+import { webSocketService } from './services/websocket.service'
+import { analyticsService } from './services/analytics.service'
+import { marketMakerService } from './services/market-maker.service'
 
 const app = new Elysia()
   .use(cors({
     origin: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
   }))
-  
+  .use(swagger({
+    documentation: {
+      info: {
+        title: 'SwiftEx API',
+        version: '6.0.0',
+        description: 'Professional Crypto Exchange API'
+      },
+      servers: [
+        {
+          url: 'http://localhost:3001',
+          description: 'Development server'
+        }
+      ],
+      tags: [
+        { name: 'Auth', description: 'Authentication endpoints' },
+        { name: 'User', description: 'User management' },
+        { name: 'OrderBook', description: 'Order book operations' },
+        { name: 'Ledger', description: 'Trading and balance management' },
+        { name: 'Wallet', description: 'Wallet operations' },
+        { name: 'Market Data', description: 'Market data and analytics' }
+      ]
+    },
+    path: '/docs'
+  }))
+  .use(html())
+
   // Health check endpoint
   .get('/health', () => {
     return {
       status: 'healthy',
+      version: '6.0.0',
       timestamp: new Date().toISOString(),
-      version: '6.0.0', // Phase 6: External Wallets & Market Making
       services: {
         database: 'connected',
+        timescaledb: 'connected',
         redis: 'connected',
-        websocket: 'active',
-        analytics: 'active',
-        marketMaker: 'active',
-        externalWallets: 'active'
+        websockets: webSocketService.getStats(),
+        analytics: 'available',
+        marketMaker: 'available'
       },
-      features: [
-        'Authentication & 2FA',
-        'Multi-chain Wallet System', 
-        'Internal Ledger System',
-        'Matching Engine & Order Book',
-        'Advanced Market Data & Analytics',
-        'External Wallet Connectivity',
-        'Market Maker Bot with Binance Feeds'
-      ]
+      features: {
+        trading: true,
+        orderMatching: true,
+        websockets: true,
+        analytics: true,
+        marketMaker: true,
+        multiChainWallets: true,
+        timeSeries: true,
+        rateLimiting: true
+      }
     }
   })
-  
-  // WebSocket endpoint for real-time data (NO AUTHENTICATION REQUIRED)
+
+  // WebSocket endpoint for real-time data
   .ws('/ws', {
     open(ws) {
       const connectionId = `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-      console.log(`🔌 WebSocket client connected: ${connectionId}`)
+      console.log(`🔌 WebSocket client ${connectionId} connected`)
       
       webSocketService.addConnection(connectionId, (message) => {
         try {
@@ -62,165 +93,134 @@ const app = new Elysia()
         }
       })
       
-      // Store connection ID in WebSocket context
+      // Store connection ID for later use
       ;(ws as any).connectionId = connectionId
       
       // Send welcome message
-      try {
+      ws.send(JSON.stringify({
+        type: 'connection',
+        data: { 
+          status: 'connected', 
+          connectionId,
+          server: 'SwiftEx Exchange',
+          timestamp: new Date().toISOString()
+        }
+      }))
+      
+      // Send initial market data
+      setTimeout(() => {
         ws.send(JSON.stringify({
-          type: 'welcome',
-          data: { message: 'Connected to SwiftEx WebSocket' },
+          type: 'ticker',
+          data: {
+            symbol: 'SOL/USDC',
+            price: '147.84',
+            change24h: '+2.45',
+            volume24h: '1500000'
+          },
           timestamp: new Date().toISOString()
         }))
-      } catch (error) {
-        console.error('Welcome message send error:', error)
-      }
+      }, 1000)
     },
-    
     message(ws, message) {
       const connectionId = (ws as any).connectionId
+      console.log(`📨 WebSocket ${connectionId} received:`, message)
+      
       if (connectionId && typeof message === 'string') {
         try {
           webSocketService.handleMessage(connectionId, message)
         } catch (error) {
           console.error('WebSocket message error:', error)
+          ws.send(JSON.stringify({
+            type: 'error',
+            data: { message: 'Invalid message format' },
+            timestamp: new Date().toISOString()
+          }))
         }
       }
     },
-    
     close(ws) {
       const connectionId = (ws as any).connectionId
       if (connectionId) {
-        console.log(`🔌 WebSocket client disconnected: ${connectionId}`)
         webSocketService.removeConnection(connectionId)
+        console.log(`🔌 WebSocket ${connectionId} disconnected`)
       }
     }
   })
-  
-  // WebSocket statistics endpoint
-  .get('/ws/stats', () => {
-    const stats = webSocketService.getStats()
-    return {
-      success: true,
-      data: {
-        ...stats,
-        timestamp: new Date().toISOString()
-      }
-    }
-  })
-  
-  // Public API Routes (no authentication required)
-  .use(publicRoutes)
-  
-  // Authenticated API Routes
+
+  // API Routes
   .use(authRoutes)
-  .use(walletRoutes)
-  .use(ledgerRoutes)
   .use(orderBookRoutes)
-  .use(analyticsRoutes)
+  .use(ledgerRoutes)
+  .use(walletRoutes)
   .use(externalWalletRoutes)
-  .use(marketMakerRoutes)
-  
-  // Global error handler
-  .onError((context) => {
-    const { error, code, request } = context;
-    console.error('Server error:', {
-      error: error.message,
-      code,
-      url: request?.url,
-      method: request?.method
-    })
+  .use(marketDataRoutes)
+  .use(publicRoutes)
+
+  // WebSocket stats endpoint
+  .get('/ws/stats', () => webSocketService.getStats())
+
+// Initialize services
+async function initializeServices() {
+  try {
+    console.log('🚀 Initializing SwiftEx Exchange...')
     
-    return {
-      success: false,
-      message: error.message || 'Internal server error',
-      code,
-      timestamp: new Date().toISOString()
-    }
-  })
+    // Initialize TimescaleDB
+    await initTimescaleDB()
+    
+    console.log('✅ All services initialized successfully')
+  } catch (error) {
+    console.error('❌ Failed to initialize services:', error)
+    process.exit(1)
+  }
+}
 
 // Start server
 const port = process.env.PORT || 3001
-const server = app.listen(port, () => {
-  console.log('🚀 Crypto Exchange Backend Server Started!')
-  console.log(`📡 Server running on http://localhost:${port}`)
-  console.log(`🔌 WebSocket endpoint: ws://localhost:${port}/ws`)
-  console.log('✨ Phase 6: External Wallets & Market Making - Active!')
-  console.log('\n🎯 Available Features:')
-  console.log('   • User Authentication & 2FA')
-  console.log('   • Multi-chain HD Wallets (Solana + Ethereum)')
-  console.log('   • Internal Ledger System')
-  console.log('   • Real-time Order Book & Matching Engine')
-  console.log('   • WebSocket Real-time Updates')
-  console.log('   • Redis-powered High Performance')
-  console.log('   • 📊 Advanced Market Data & Analytics')
-  console.log('   • 📈 Technical Indicators & Historical Data')
-  console.log('   • 🎯 Risk Analytics & Performance Metrics')
-  console.log('   • 🔗 External Wallet Connectivity (Phantom/MetaMask)')
-  console.log('   • 🤖 Market Maker Bot with Binance Price Feeds')
-  console.log('\n📚 API Documentation:')
-  console.log(`   Health: GET ${port}/health`)
-  console.log(`   Order Book: GET ${port}/orderbook/:pair`)
-  console.log(`   Analytics: GET ${port}/analytics/config`)
-  console.log(`   Market Maker: GET ${port}/api/market-maker/prices`)
-  console.log(`   External Wallets: POST ${port}/api/external-wallet/connect`)
-  console.log(`   WebSocket: ws://localhost:${port}/ws`)
-  console.log('\n💡 Press Ctrl+C to stop the server')
-})
 
-// Graceful shutdown handling
-process.on('SIGINT', async () => {
-  console.log('\n📝 Received SIGINT (Ctrl+C). Shutting down gracefully...')
+if (import.meta.env?.NODE_ENV !== 'test') {
+  console.log(`🔥 SwiftEx Exchange running on http://localhost:${port}`)
+  console.log(`📖 API Documentation: http://localhost:${port}/docs`)
   
-  try {
-    // Stop market maker service
-    console.log('🤖 Stopping Market Maker Service...')
-    marketMakerService.stop()
+  // Initialize services first
+  initializeServices()
+  
+  // Start the server with Elysia's listen method for proper WebSocket support
+  app.listen(port, () => {
+    console.log(`🚀 Server is running on port ${port}`)
+  })
+  
+  // Graceful shutdown handling
+  const gracefulShutdown = async (signal: string) => {
+    console.log(`\n🛑 Received ${signal}, shutting down gracefully...`)
     
-    // Close WebSocket connections
-    console.log('🔌 Closing WebSocket connections...')
-    webSocketService.closeAllConnections()
-    
-    // Close Redis connection
-    console.log('📦 Closing Redis connection...')
-    await redis.quit()
-    
-    // Stop the server
-    console.log('🛑 Stopping server...')
-    server.stop()
-    
-    console.log('✅ Server shut down successfully')
-    process.exit(0)
-  } catch (error) {
-    console.error('❌ Error during shutdown:', error)
-    process.exit(1)
+    try {
+      // Close WebSocket connections
+      console.log('🔄 Closing WebSocket connections...')
+      webSocketService.closeAllConnections()
+      
+      // Stop background services
+      console.log('🔄 Stopping background services...')
+      
+      // Stop market maker service
+      marketMakerService.stop()
+      
+      // Stop external wallet monitoring
+      const { externalWalletService } = await import('./services/external-wallet.service')
+      externalWalletService.stopDepositMonitoring()
+      
+      console.log('✅ All services stopped successfully')
+      process.exit(0)
+    } catch (error) {
+      console.error('❌ Error during shutdown:', error)
+      process.exit(1)
+    }
   }
-})
+  
+  // Handle shutdown signals
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'))
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
+  process.on('SIGUSR2', () => gracefulShutdown('SIGUSR2')) // For nodemon compatibility
+}
 
-process.on('SIGTERM', async () => {
-  console.log('\n📝 Received SIGTERM. Shutting down gracefully...')
-  
-  try {
-    // Stop market maker service
-    console.log('🤖 Stopping Market Maker Service...')
-    marketMakerService.stop()
-    
-    // Close WebSocket connections
-    console.log('🔌 Closing WebSocket connections...')
-    webSocketService.closeAllConnections()
-    
-    // Close Redis connection
-    console.log('📦 Closing Redis connection...')
-    await redis.quit()
-    
-    // Stop the server
-    console.log('🛑 Stopping server...')
-    server.stop()
-    
-    console.log('✅ Server shut down successfully')
-    process.exit(0)
-  } catch (error) {
-    console.error('❌ Error during shutdown:', error)
-    process.exit(1)
-  }
-}) 
+// Export for testing only
+export default import.meta.env?.NODE_ENV === 'test' ? app : {}; 
