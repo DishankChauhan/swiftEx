@@ -1,24 +1,10 @@
 import { prisma } from '../config/database'
-import type { 
-  CreateAssetConfig, 
-  CreateTradingPair, 
-  CreateOrder, 
-  UpdateOrder,
-  BalanceOperation,
-  InternalTransfer,
-  ApiResponse,
-  PaginatedResponse,
-  AssetConfig,
-  TradingPair,
-  Order,
-  LedgerEntry
-} from '../types/ledger'
 import type { Prisma, OrderStatus, LedgerEntryType } from '@prisma/client'
 import { orderBookService } from './orderbook.service'
 
 export class LedgerService {
   // Asset Configuration Management
-  async createAssetConfig(data: CreateAssetConfig): Promise<AssetConfig> {
+  async createAssetConfig(data: any): Promise<any> {
     const existingAsset = await prisma.assetConfig.findUnique({
       where: { symbol: data.symbol }
     })
@@ -42,21 +28,21 @@ export class LedgerService {
     return asset
   }
 
-  async getAssetConfigs(activeOnly = true): Promise<AssetConfig[]> {
+  async getAssetConfigs(activeOnly = true): Promise<any[]> {
     return await prisma.assetConfig.findMany({
       where: activeOnly ? { isActive: true } : undefined,
       orderBy: { symbol: 'asc' }
     })
   }
 
-  async getAssetConfig(symbol: string): Promise<AssetConfig | null> {
+  async getAssetConfig(symbol: string): Promise<any | null> {
     return await prisma.assetConfig.findUnique({
       where: { symbol }
     })
   }
 
   // Trading Pair Management
-  async createTradingPair(data: CreateTradingPair): Promise<TradingPair> {
+  async createTradingPair(data: any): Promise<any> {
     const symbol = `${data.baseAsset}/${data.quoteAsset}`
     
     const existingPair = await prisma.tradingPair.findUnique({
@@ -88,7 +74,7 @@ export class LedgerService {
     })
   }
 
-  async getTradingPairs(activeOnly = true): Promise<TradingPair[]> {
+  async getTradingPairs(activeOnly = true): Promise<any[]> {
     return await prisma.tradingPair.findMany({
       where: activeOnly ? { isActive: true } : undefined,
       include: {
@@ -99,7 +85,7 @@ export class LedgerService {
     })
   }
 
-  async getTradingPair(symbol: string): Promise<TradingPair | null> {
+  async getTradingPair(symbol: string): Promise<any | null> {
     return await prisma.tradingPair.findUnique({
       where: { symbol },
       include: {
@@ -129,7 +115,7 @@ export class LedgerService {
     })
   }
 
-  async executeBalanceOperation(operation: BalanceOperation): Promise<void> {
+  async executeBalanceOperation(operation: any): Promise<void> {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // Get current balance or create if doesn't exist
       let balance = await tx.balance.findFirst({
@@ -172,10 +158,12 @@ export class LedgerService {
 
       // Execute the operation
       switch (operation.operation) {
+        case 'credit':
         case 'add':
           newAvailable += operationAmount
           newTotal += operationAmount
           break
+        case 'debit':
         case 'subtract':
           if (currentAvailable < operationAmount) {
             throw new Error(`Insufficient available balance. Available: ${currentAvailable}, Required: ${operationAmount}`)
@@ -228,7 +216,7 @@ export class LedgerService {
   }
 
   // Order Management
-  async createOrder(userId: string, orderData: CreateOrder): Promise<Order> {
+  async createOrder(userId: string, orderData: any): Promise<any> {
     return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // Verify trading pair exists and is active
       const tradingPair = await tx.tradingPair.findUnique({
@@ -263,16 +251,45 @@ export class LedgerService {
         // For buy orders, lock quote asset (e.g., USDC for SOL/USDC)
         assetToLock = tradingPair.quoteAsset
         if (orderData.orderType === 'market') {
-          // For market orders, we'll use a high estimate since we don't know the exact price
-          // In a real system, you'd get the current market price from the order book
-          throw new Error('Market orders not yet implemented')
+          // For market buy orders, estimate the cost based on current ask prices
+          const orderBook = await orderBookService.getOrderBook(orderData.tradingPair)
+          if (!orderBook.asks || orderBook.asks.length === 0) {
+            throw new Error('No liquidity available for market buy order')
+          }
+          
+          // Calculate estimated cost by walking through the asks
+          let remainingAmount = orderAmount
+          let estimatedCost = 0
+          
+          for (const ask of orderBook.asks) {
+            if (remainingAmount <= 0) break
+            
+            const askAmount = parseFloat(ask.amount)
+            const askPrice = parseFloat(ask.price)
+            const fillAmount = Math.min(remainingAmount, askAmount)
+            
+            estimatedCost += fillAmount * askPrice
+            remainingAmount -= fillAmount
+          }
+          
+          if (remainingAmount > 0) {
+            throw new Error(`Insufficient liquidity. Can only fill ${orderAmount - remainingAmount} of ${orderAmount} ${tradingPair.baseAsset}`)
+          }
+          
+          // Add 5% buffer for slippage protection
+          requiredAmount = estimatedCost * 1.05
         } else {
           requiredAmount = orderAmount * parseFloat(orderData.price!)
         }
       } else {
         // For sell orders, lock base asset (e.g., SOL for SOL/USDC)
         assetToLock = tradingPair.baseAsset
-        requiredAmount = orderAmount
+        if (orderData.orderType === 'market') {
+          // For market sell orders, we just need the base asset amount
+          requiredAmount = orderAmount
+        } else {
+          requiredAmount = orderAmount
+        }
       }
 
       // Check user balance and lock funds
@@ -289,27 +306,30 @@ export class LedgerService {
         data: {
           userId,
           tradingPair: orderData.tradingPair,
-          orderType: orderData.orderType,
+          orderType: orderData.orderType || 'limit',
           side: orderData.side,
           amount: orderData.amount,
           price: orderData.price,
           stopPrice: orderData.stopPrice,
           remaining: orderData.amount,
-          timeInForce: orderData.timeInForce,
+          timeInForce: orderData.timeInForce || 'GTC',
           clientOrderId: orderData.clientOrderId,
           lockedAmount: requiredAmount.toString(),
           lockedAsset: assetToLock
         }
       })
 
-      // Add to Redis order book
-      await orderBookService.addOrderToBook(order)
+      // Only add limit orders to Redis order book
+      // Market orders will be processed immediately by the matching engine
+      if (orderData.orderType !== 'market') {
+        await orderBookService.addOrderToBook(order)
+      }
 
       return order
     })
   }
 
-  async cancelOrder(userId: string, orderId: string): Promise<Order> {
+  async cancelOrder(userId: string, orderId: string): Promise<any> {
     return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const order = await tx.order.findFirst({
         where: {
@@ -320,23 +340,25 @@ export class LedgerService {
       })
 
       if (!order) {
-        throw new Error('Order not found or cannot be cancelled')
+        throw new Error('Order not found or not cancellable')
       }
 
-      // Unlock the locked funds
-      await this.executeBalanceOperation({
-        userId,
-        asset: order.lockedAsset,
-        amount: order.lockedAmount,
-        operation: 'unlock',
-        orderId: order.id,
-        description: `Unlock funds from cancelled order ${order.id}`
-      })
+      // Unlock funds
+      if (order.lockedAmount && parseFloat(order.lockedAmount) > 0) {
+        await this.executeBalanceOperation({
+          userId,
+          asset: order.lockedAsset!,
+          amount: order.lockedAmount,
+          operation: 'unlock',
+          orderId: order.id,
+          description: `Unlock from cancelled order ${order.id}`
+        })
+      }
 
       // Update order status
       const updatedOrder = await tx.order.update({
         where: { id: orderId },
-        data: {
+        data: { 
           status: 'cancelled',
           cancelledAt: new Date()
         }
@@ -357,7 +379,7 @@ export class LedgerService {
       page?: number
       pageSize?: number
     } = {}
-  ): Promise<PaginatedResponse<Order>> {
+  ): Promise<any> {
     const { status, tradingPair, page = 1, pageSize = 50 } = options
     const skip = (page - 1) * pageSize
 
@@ -389,7 +411,7 @@ export class LedgerService {
     }
   }
 
-  async getOrder(userId: string, orderId: string): Promise<Order | null> {
+  async getOrder(userId: string, orderId: string): Promise<any | null> {
     return await prisma.order.findFirst({
       where: {
         id: orderId,
@@ -403,7 +425,7 @@ export class LedgerService {
   }
 
   // Internal Transfer
-  async internalTransfer(transfer: InternalTransfer): Promise<void> {
+  async internalTransfer(transfer: any): Promise<void> {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // Verify both users exist
       const [fromUser, toUser] = await Promise.all([
@@ -449,7 +471,7 @@ export class LedgerService {
       page?: number
       pageSize?: number
     } = {}
-  ): Promise<PaginatedResponse<LedgerEntry>> {
+  ): Promise<any> {
     const { asset, entryType, page = 1, pageSize = 50 } = options
     const skip = (page - 1) * pageSize
 

@@ -161,7 +161,7 @@ export const orderBookRoutes = new Elysia({ prefix: '/orderbook' })
   })
 
   // Process new order (replace the old ledger order endpoint)
-  .post('/order', async ({ body, headers }) => {
+  .post('/order', async ({ body, headers }: { body: any, headers: any }) => {
     try {
       const auth = await authMiddleware({ headers })
       const orderData = {

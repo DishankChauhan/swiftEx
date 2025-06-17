@@ -1,23 +1,22 @@
 import redis from '../config/redis'
-import {
-  OrderBookSnapshot,
-  OrderBookLevel,
-  OrderBookUpdate,
-  PriceLevel,
-  REDIS_KEYS,
-  OrderProcessingResult,
-  OrderMatch
-} from '../types/matching'
 import { prisma } from '../config/database'
-import type { Order } from '../types/ledger'
 import { webSocketService } from './websocket.service'
+
+// Define Redis keys
+const REDIS_KEYS = {
+  orderBookBids: (tradingPair: string) => `orderbook:${tradingPair.replace('/', '')}:bids`,
+  orderBookAsks: (tradingPair: string) => `orderbook:${tradingPair.replace('/', '')}:asks`,
+  order: (orderId: string) => `order:${orderId}`,
+  userOrders: (userId: string) => `user:${userId}:orders`,
+  sequence: (tradingPair: string) => `sequence:${tradingPair.replace('/', '')}`
+}
 
 export class OrderBookService {
   /**
    * Add order to order book in Redis
    * Uses sorted sets for efficient price-time priority
    */
-  async addOrderToBook(order: Order): Promise<void> {
+  async addOrderToBook(order: any): Promise<void> {
     const price = parseFloat(order.price!)
     const score = order.side === 'buy' ? -price : price // Negative for bids to sort DESC
 
@@ -90,45 +89,60 @@ export class OrderBookService {
   /**
    * Get order book snapshot
    */
-  async getOrderBook(tradingPair: string, depth: number = 20): Promise<OrderBookSnapshot> {
-    const bidsKey = REDIS_KEYS.orderBookBids(tradingPair)
-    const asksKey = REDIS_KEYS.orderBookAsks(tradingPair)
+  async getOrderBook(tradingPair: string, depth: number = 20): Promise<any> {
+    try {
+      const orderBookKey = `orderbook:${tradingPair.replace('/', '')}`
+      
+      // Get bids and asks from Redis sorted sets
+      const [bidOrderIds, askOrderIds] = await Promise.all([
+        redis.zRange(`${orderBookKey}:bids`, 0, depth - 1, { REV: true }),
+        redis.zRange(`${orderBookKey}:asks`, 0, depth - 1)
+      ])
 
-    // Get top bids (highest prices first) and asks (lowest prices first)
-    const [bidOrderIds, askOrderIds] = await Promise.all([
-      redis.zRange(bidsKey, 0, depth - 1, { REV: true }), // Reverse for highest first
-      redis.zRange(asksKey, 0, depth - 1) // Normal for lowest first
-    ])
+      // Get order details for bids and asks
+      const [bidOrders, askOrders] = await Promise.all([
+        this.getOrderLevels(bidOrderIds),
+        this.getOrderLevels(askOrderIds)
+      ])
 
-    // Get order details for bids and asks
-    const [bidOrders, askOrders] = await Promise.all([
-      this.getOrderLevels(bidOrderIds),
-      this.getOrderLevels(askOrderIds)
-    ])
+      // Aggregate orders by price level
+      const bids = this.aggregateOrderLevels(bidOrders)
+      const asks = this.aggregateOrderLevels(askOrders)
 
-    // Aggregate by price level
-    const bids = this.aggregateOrderLevels(bidOrders)
-    const asks = this.aggregateOrderLevels(askOrders)
+      // Calculate spread
+      let spread = { absolute: '0', percentage: '0' }
+      if (bids.length > 0 && asks.length > 0) {
+        const bestBid = parseFloat(bids[0].price)
+        const bestAsk = parseFloat(asks[0].price)
+        const absoluteSpread = bestAsk - bestBid
+        const percentageSpread = (absoluteSpread / bestBid) * 100
+        
+        spread = {
+          absolute: absoluteSpread.toString(),
+          percentage: percentageSpread.toString()
+        }
+      }
 
-    // Get sequence number
-    const sequence = await this.getNextSequence(tradingPair)
-
-    return {
-      tradingPair,
-      bids,
-      asks,
-      lastUpdated: new Date().toISOString(),
-      sequence
+      return {
+        tradingPair,
+        timestamp: Date.now(),
+        bids,
+        asks,
+        spread
+      }
+    } catch (error) {
+      console.error('Error fetching order book:', error)
+      throw new Error('Failed to fetch order book')
     }
   }
 
   /**
    * Get order details from Redis
    */
-  private async getOrderLevels(orderIds: string[]): Promise<PriceLevel[]> {
+  private async getOrderLevels(orderIds: string[]): Promise<any[]> {
     if (orderIds.length === 0) return []
 
-    const orders: PriceLevel[] = []
+    const orders: any[] = []
     for (const orderId of orderIds) {
       const orderData = await redis.hGetAll(REDIS_KEYS.order(orderId))
       if (orderData.orderId) {
@@ -147,7 +161,7 @@ export class OrderBookService {
   /**
    * Aggregate orders by price level
    */
-  private aggregateOrderLevels(orders: PriceLevel[]): OrderBookLevel[] {
+  private aggregateOrderLevels(orders: any[]): any[] {
     const priceMap = new Map<string, { amount: number; count: number }>()
     
     for (const order of orders) {
@@ -157,7 +171,7 @@ export class OrderBookService {
       priceMap.set(order.price, existing)
     }
 
-    const levels: OrderBookLevel[] = []
+    const levels: any[] = []
     let runningTotal = 0
 
     for (const [price, { amount, count }] of priceMap) {
@@ -176,39 +190,33 @@ export class OrderBookService {
   /**
    * Get best bid and ask prices
    */
-  async getBestPrices(tradingPair: string): Promise<{ bestBid?: string; bestAsk?: string }> {
-    const bidsKey = REDIS_KEYS.orderBookBids(tradingPair)
-    const asksKey = REDIS_KEYS.orderBookAsks(tradingPair)
+  async getBestPrices(tradingPair: string): Promise<{ bestBid: string | null, bestAsk: string | null }> {
+    try {
+      const orderBookKey = `orderbook:${tradingPair.replace('/', '')}`
+      
+      const [bestBidResult, bestAskResult] = await Promise.all([
+        redis.zRange(`${orderBookKey}:bids`, 0, 0, { REV: true }),
+        redis.zRange(`${orderBookKey}:asks`, 0, 0)
+      ])
 
-    const [bestBidIds, bestAskIds] = await Promise.all([
-      redis.zRange(bidsKey, 0, 0, { REV: true }), // Highest bid
-      redis.zRange(asksKey, 0, 0) // Lowest ask
-    ])
+      const bestBid = bestBidResult.length > 1 ? bestBidResult[1] : null
+      const bestAsk = bestAskResult.length > 1 ? bestAskResult[1] : null
 
-    let bestBid: string | undefined
-    let bestAsk: string | undefined
-
-    if (bestBidIds.length > 0) {
-      const bidData = await redis.hGet(REDIS_KEYS.order(bestBidIds[0]), 'price')
-      bestBid = bidData || undefined
+      return { bestBid, bestAsk }
+    } catch (error) {
+      console.error('Error getting best prices:', error)
+      return { bestBid: null, bestAsk: null }
     }
-
-    if (bestAskIds.length > 0) {
-      const askData = await redis.hGet(REDIS_KEYS.order(bestAskIds[0]), 'price')
-      bestAsk = askData || undefined
-    }
-
-    return { bestBid, bestAsk }
   }
 
   /**
    * Find matching orders for a new order
    */
   async findMatches(
-    newOrder: Order,
+    newOrder: any,
     maxMatches: number = 100
-  ): Promise<OrderMatch[]> {
-    const matches: OrderMatch[] = []
+  ): Promise<any[]> {
+    const matches: any[] = []
     let remainingAmount = parseFloat(newOrder.remaining)
 
     // Determine which side of the book to check
@@ -270,7 +278,7 @@ export class OrderBookService {
   /**
    * Process order matches and update balances
    */
-  async processMatches(matches: OrderMatch[]): Promise<void> {
+  async processMatches(matches: any[]): Promise<void> {
     if (matches.length === 0) return
 
     // Process each match
@@ -282,7 +290,7 @@ export class OrderBookService {
   /**
    * Execute a single match
    */
-  private async executeMatch(match: OrderMatch): Promise<void> {
+  private async executeMatch(match: any): Promise<void> {
     // Update maker order amount
     const makerOrderData = await redis.hGetAll(REDIS_KEYS.order(match.counterOrderId))
     if (makerOrderData.orderId) {
@@ -304,7 +312,7 @@ export class OrderBookService {
   /**
    * Record a trade for market data and history
    */
-  private async recordTrade(match: OrderMatch): Promise<void> {
+  private async recordTrade(match: any): Promise<void> {
     // This would typically store in a trades list for market data
     // For now, we'll just increment sequence
     const order = await prisma.order.findUnique({ where: { id: match.orderId } })
@@ -379,6 +387,64 @@ export class OrderBookService {
     } catch (error) {
       console.error(`Failed to broadcast order book update for ${tradingPair}:`, error)
     }
+  }
+
+  /**
+   * Find matches for market orders - matches all available liquidity
+   */
+  async findMarketMatches(
+    newOrder: any,
+    maxMatches: number = 100
+  ): Promise<any[]> {
+    const matches: any[] = []
+    const isNewOrderBuy = newOrder.side === 'buy'
+    
+    // Get appropriate order book side
+    const orderBookKey = isNewOrderBuy 
+      ? REDIS_KEYS.orderBookAsks(newOrder.tradingPair) // Buy orders match against asks
+      : REDIS_KEYS.orderBookBids(newOrder.tradingPair) // Sell orders match against bids
+
+    // Get all orders from the order book (sorted by price-time priority)
+    const candidateOrderIds = await redis.zRange(orderBookKey, 0, maxMatches - 1)
+    
+    let remainingAmount = parseFloat(newOrder.amount)
+
+    for (const candidateOrderId of candidateOrderIds) {
+      if (remainingAmount <= 0 || matches.length >= maxMatches) break
+
+      const candidateOrderData = await redis.hGetAll(REDIS_KEYS.order(candidateOrderId))
+      if (!candidateOrderData.orderId) continue
+
+      const candidatePrice = parseFloat(candidateOrderData.price)
+      
+      // For market orders, we accept ANY price (no price checking)
+      // Calculate match amount
+      const candidateAmount = parseFloat(candidateOrderData.amount)
+      const matchAmount = Math.min(remainingAmount, candidateAmount)
+
+      // Execute price is the maker's price (price-time priority)
+      const executePrice = candidatePrice
+
+      // Calculate fees
+      const makerFee = (matchAmount * executePrice * 0.001).toString() // 0.1% maker fee
+      const takerFee = (matchAmount * executePrice * 0.001).toString() // 0.1% taker fee
+
+      matches.push({
+        orderId: newOrder.id,
+        counterOrderId: candidateOrderId,
+        amount: matchAmount.toString(),
+        price: executePrice.toString(),
+        fee: takerFee,
+        feeAsset: isNewOrderBuy ? newOrder.tradingPair.split('/')[0] : newOrder.tradingPair.split('/')[1],
+        isMaker: false, // New order is always taker
+        userId: newOrder.userId,
+        timestamp: new Date().toISOString()
+      })
+
+      remainingAmount -= matchAmount
+    }
+
+    return matches
   }
 }
 

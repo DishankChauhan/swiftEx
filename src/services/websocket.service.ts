@@ -1,22 +1,81 @@
+import { Server as SocketIOServer } from 'socket.io'
 import redis from '../config/redis'
-import {
-  WebSocketMessage,
-  SubscriptionData,
-  OrderBookSnapshot,
-  Trade,
-  Ticker,
-  CHANNELS,
-  REDIS_KEYS
-} from '../types/matching'
+import { verifyAccessToken } from '../utils/jwt'
+
+// Define missing constants
+const REDIS_KEYS = {
+  subscribers: (channel: string) => `ws:subscribers:${channel}`
+}
+
+const CHANNELS = {
+  orderBook: (tradingPair: string) => `orderbook@${tradingPair}`,
+  trade: (tradingPair: string) => `trade@${tradingPair}`,
+  ticker: (tradingPair: string) => `ticker@${tradingPair}`,
+  allTickers: 'ticker@all'
+}
 
 interface WebSocketConnection {
   id: string
+  userId?: string
   subscriptions: Set<string>
-  send: (message: string) => void
+  socket: any
 }
 
 export class WebSocketService {
-  private connections = new Map<string, WebSocketConnection>()
+  private io?: SocketIOServer
+  private connections: Map<string, WebSocketConnection> = new Map()
+  private subscriptions: Map<string, Set<string>> = new Map() // channel -> connection IDs
+
+  constructor(io?: SocketIOServer) {
+    if (io) {
+      this.io = io
+      this.setupConnectionHandlers()
+    }
+  }
+
+  private setupConnectionHandlers() {
+    this.io?.on('connection', (socket: any) => {
+      console.log(`WebSocket connection established: ${socket.id}`)
+      
+      const connection: WebSocketConnection = {
+        id: socket.id,
+        subscriptions: new Set(),
+        socket
+      }
+      this.connections.set(socket.id, connection)
+
+      // Handle authentication
+      socket.on('authenticate', async (data: any) => {
+        try {
+          const { token } = data
+          const payload = await verifyAccessToken(token)
+          
+          if (payload) {
+            connection.userId = payload.userId
+            socket.emit('authenticated', { success: true, userId: payload.userId })
+          } else {
+            socket.emit('authenticated', { success: false, message: 'Invalid token' })
+          }
+        } catch (error) {
+          socket.emit('authenticated', { success: false, message: 'Authentication failed' })
+        }
+      })
+
+      // Handle channel subscriptions
+      socket.on('subscribe', (data: any) => {
+        this.handleSubscription(socket.id, data)
+      })
+
+      socket.on('unsubscribe', (data: any) => {
+        this.handleUnsubscription(socket.id, data)
+      })
+
+      // Handle disconnection
+      socket.on('disconnect', () => {
+        this.removeConnection(socket.id)
+      })
+    })
+  }
 
   /**
    * Register a new WebSocket connection
@@ -25,7 +84,7 @@ export class WebSocketService {
     const connection: WebSocketConnection = {
       id,
       subscriptions: new Set(),
-      send
+      socket: { send }
     }
     
     this.connections.set(id, connection)
@@ -52,7 +111,7 @@ export class WebSocketService {
    */
   handleMessage(connectionId: string, message: string): void {
     try {
-      const data = JSON.parse(message) as WebSocketMessage
+      const data = JSON.parse(message) as any
       
       switch (data.type) {
         case 'subscribe':
@@ -78,7 +137,7 @@ export class WebSocketService {
   /**
    * Handle subscription request
    */
-  private handleSubscription(connectionId: string, data: SubscriptionData): void {
+  private handleSubscription(connectionId: string, data: any): void {
     const connection = this.connections.get(connectionId)
     if (!connection) return
 
@@ -117,7 +176,7 @@ export class WebSocketService {
   /**
    * Handle unsubscription request
    */
-  private handleUnsubscription(connectionId: string, data: SubscriptionData): void {
+  private handleUnsubscription(connectionId: string, data: any): void {
     const connection = this.connections.get(connectionId)
     if (!connection) return
 
@@ -202,7 +261,7 @@ export class WebSocketService {
         orderBookService.getOrderBookStats(tradingPair)
       ])
       
-      const ticker: Ticker = {
+      const ticker: any = {
         tradingPair,
         lastPrice: prices.bestAsk || '0',
         priceChange: '0',
@@ -228,7 +287,7 @@ export class WebSocketService {
   /**
    * Broadcast order book update to subscribers
    */
-  async broadcastOrderBookUpdate(tradingPair: string, orderBook: OrderBookSnapshot): Promise<void> {
+  async broadcastOrderBookUpdate(tradingPair: string, orderBook: any): Promise<void> {
     const channel = CHANNELS.orderBook(tradingPair)
     await this.broadcastToChannel(channel, {
       type: 'orderbook',
@@ -241,7 +300,7 @@ export class WebSocketService {
   /**
    * Broadcast trade to subscribers
    */
-  async broadcastTrade(trade: Trade): Promise<void> {
+  async broadcastTrade(trade: any): Promise<void> {
     const channel = CHANNELS.trade(trade.tradingPair)
     await this.broadcastToChannel(channel, {
       type: 'trade',
@@ -254,7 +313,7 @@ export class WebSocketService {
   /**
    * Broadcast ticker update to subscribers
    */
-  async broadcastTicker(ticker: Ticker): Promise<void> {
+  async broadcastTicker(ticker: any): Promise<void> {
     const channels = [
       CHANNELS.ticker(ticker.tradingPair),
       CHANNELS.allTickers
@@ -273,7 +332,7 @@ export class WebSocketService {
   /**
    * Broadcast message to all subscribers of a channel
    */
-  private async broadcastToChannel(channel: string, message: WebSocketMessage): Promise<void> {
+  private async broadcastToChannel(channel: string, message: any): Promise<void> {
     try {
       const subscribers = await redis.sMembers(REDIS_KEYS.subscribers(channel))
       
@@ -294,11 +353,11 @@ export class WebSocketService {
   /**
    * Send message to a specific connection
    */
-  private sendMessage(connectionId: string, message: WebSocketMessage): void {
+  private sendMessage(connectionId: string, message: any): void {
     const connection = this.connections.get(connectionId)
     if (connection) {
       try {
-        connection.send(JSON.stringify(message))
+        connection.socket.send(JSON.stringify(message))
       } catch (error) {
         console.error(`Failed to send message to ${connectionId}:`, error)
         this.removeConnection(connectionId)
@@ -326,7 +385,7 @@ export class WebSocketService {
     for (const [connectionId, connection] of this.connections.entries()) {
       try {
         // Send goodbye message
-        connection.send(JSON.stringify({
+        connection.socket.send(JSON.stringify({
           type: 'goodbye',
           data: { message: 'Server shutting down' },
           timestamp: new Date().toISOString()

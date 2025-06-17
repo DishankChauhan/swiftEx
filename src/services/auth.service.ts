@@ -1,22 +1,14 @@
 import bcrypt from 'bcryptjs'
+import crypto from 'crypto'
 import { authenticator } from 'otplib'
 import QRCode from 'qrcode'
 import { prisma } from '../config/database'
-import { 
-  RegisterRequest, 
-  LoginRequest, 
-  Setup2FARequest, 
-  Verify2FARequest,
-  Disable2FARequest,
-  AuthResponse,
-  JWTPayload,
-  RefreshTokenPayload
-} from '../types/auth'
 import { generateTokens, verifyRefreshToken } from '../utils/jwt'
+
 
 export class AuthService {
   // Register new user
-  async register(data: RegisterRequest): Promise<AuthResponse> {
+  async register(data: any): Promise<any> {
     try {
       // Check if user already exists
       const existingUser = await prisma.user.findUnique({
@@ -82,7 +74,7 @@ export class AuthService {
   }
 
   // Login user
-  async login(data: LoginRequest): Promise<AuthResponse> {
+  async login(data: any): Promise<any> {
     try {
       // Find user
       const user = await prisma.user.findUnique({
@@ -158,7 +150,7 @@ export class AuthService {
   }
 
   // Setup 2FA
-  async setup2FA(userId: string): Promise<AuthResponse> {
+  async setup2FA(userId: string): Promise<any> {
     try {
       const user = await prisma.user.findUnique({
         where: { id: userId }
@@ -210,16 +202,30 @@ export class AuthService {
   }
 
   // Enable 2FA after verification
-  async enable2FA(userId: string, data: Setup2FARequest): Promise<AuthResponse> {
+  async enable2FA(userId: string, data: any): Promise<any> {
     try {
       const user = await prisma.user.findUnique({
         where: { id: userId }
       })
 
-      if (!user || !user.secret2FA) {
+      if (!user) {
         return {
           success: false,
-          message: '2FA setup not initiated'
+          message: 'User not found'
+        }
+      }
+
+      if (user.is2FAEnabled) {
+        return {
+          success: false,
+          message: '2FA is already enabled'
+        }
+      }
+
+      if (!user.secret2FA) {
+        return {
+          success: false,
+          message: 'Please setup 2FA first'
         }
       }
 
@@ -247,26 +253,26 @@ export class AuthService {
         message: '2FA enabled successfully'
       }
     } catch (error) {
-      console.error('2FA enable error:', error)
+      console.error('Enable 2FA error:', error)
       return {
         success: false,
-        message: '2FA enable failed'
+        message: 'Failed to enable 2FA'
       }
     }
   }
 
   // Login with 2FA
-  async loginWith2FA(data: Verify2FARequest): Promise<AuthResponse> {
+  async loginWith2FA(data: any): Promise<any> {
     try {
       // Find user
       const user = await prisma.user.findUnique({
         where: { email: data.email }
       })
 
-      if (!user || !user.is2FAEnabled || !user.secret2FA) {
+      if (!user) {
         return {
           success: false,
-          message: 'Invalid request'
+          message: 'Invalid credentials'
         }
       }
 
@@ -276,6 +282,13 @@ export class AuthService {
         return {
           success: false,
           message: 'Invalid credentials'
+        }
+      }
+
+      if (!user.is2FAEnabled || !user.secret2FA) {
+        return {
+          success: false,
+          message: '2FA is not enabled for this account'
         }
       }
 
@@ -337,29 +350,47 @@ export class AuthService {
   }
 
   // Disable 2FA
-  async disable2FA(userId: string, data: Disable2FARequest): Promise<AuthResponse> {
+  async disable2FA(userId: string, data: any): Promise<any> {
     try {
       const user = await prisma.user.findUnique({
         where: { id: userId }
       })
 
-      if (!user || !user.is2FAEnabled || !user.secret2FA) {
+      if (!user) {
+        return {
+          success: false,
+          message: 'User not found'
+        }
+      }
+
+      if (!user.is2FAEnabled) {
         return {
           success: false,
           message: '2FA is not enabled'
         }
       }
 
-      // Verify token
-      const isValid = authenticator.verify({
-        token: data.token,
-        secret: user.secret2FA
-      })
-
-      if (!isValid) {
+      // Verify current password
+      const isPasswordValid = await bcrypt.compare(data.password, user.password)
+      if (!isPasswordValid) {
         return {
           success: false,
-          message: 'Invalid 2FA token'
+          message: 'Invalid password'
+        }
+      }
+
+      // Verify 2FA token
+      if (user.secret2FA) {
+        const isTokenValid = authenticator.verify({
+          token: data.token,
+          secret: user.secret2FA
+        })
+
+        if (!isTokenValid) {
+          return {
+            success: false,
+            message: 'Invalid 2FA token'
+          }
         }
       }
 
@@ -377,36 +408,40 @@ export class AuthService {
         message: '2FA disabled successfully'
       }
     } catch (error) {
-      console.error('2FA disable error:', error)
+      console.error('Disable 2FA error:', error)
       return {
         success: false,
-        message: '2FA disable failed'
+        message: 'Failed to disable 2FA'
       }
     }
   }
 
-  // Refresh token
-  async refreshToken(refreshToken: string): Promise<AuthResponse> {
+  // Refresh tokens
+  async refreshToken(refreshToken: string): Promise<any> {
     try {
       // Verify refresh token
-      const payload = await verifyRefreshToken(refreshToken) as RefreshTokenPayload
+      const payload = verifyRefreshToken(refreshToken) as any
 
       // Find session
-      const session = await prisma.session.findUnique({
-        where: { refreshToken },
+      const session = await prisma.session.findFirst({
+        where: {
+          refreshToken,
+          userId: payload.userId,
+          expiresAt: { gt: new Date() }
+        },
         include: { user: true }
       })
 
-      if (!session || session.expiresAt < new Date()) {
+      if (!session) {
         return {
           success: false,
-          message: 'Invalid or expired refresh token'
+          message: 'Invalid refresh token'
         }
       }
 
       // Generate new tokens
       const tokens = await generateTokens({
-        userId: payload.userId,
+        userId: session.user.id,
         email: session.user.email
       })
 
@@ -422,14 +457,14 @@ export class AuthService {
 
       return {
         success: true,
-        message: 'Token refreshed successfully',
+        message: 'Tokens refreshed successfully',
         data: {
           accessToken: tokens.accessToken,
           refreshToken: tokens.refreshToken
         }
       }
     } catch (error) {
-      console.error('Token refresh error:', error)
+      console.error('Refresh token error:', error)
       return {
         success: false,
         message: 'Token refresh failed'
@@ -438,8 +473,9 @@ export class AuthService {
   }
 
   // Logout
-  async logout(refreshToken: string): Promise<AuthResponse> {
+  async logout(refreshToken: string): Promise<any> {
     try {
+      // Find and delete session
       await prisma.session.deleteMany({
         where: { refreshToken }
       })

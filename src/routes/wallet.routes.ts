@@ -1,10 +1,5 @@
-import { Elysia } from 'elysia'
+import { Elysia, t } from 'elysia'
 import { WalletService } from '../services/wallet.service'
-import {
-  depositAddressRequestSchema,
-  withdrawalRequestSchema,
-  transactionHistorySchema
-} from '../types/wallet'
 import { verifyAccessToken } from '../utils/jwt'
 import { prisma } from '../config/database'
 
@@ -58,14 +53,18 @@ export const walletRoutes = new Elysia({ prefix: '/wallet' })
   .post('/deposit/address', async (context) => {
     try {
       const user = await authGuard(context)
-      const validatedData = depositAddressRequestSchema.parse(context.body)
-      return await walletService.generateDepositAddress(user.id, validatedData)
+      return await walletService.generateDepositAddress(user.id, context.body)
     } catch (error) {
       return {
         success: false,
         message: error instanceof Error ? error.message : 'Failed to generate deposit address'
       }
     }
+  }, {
+    body: t.Object({
+      chain: t.String(),
+      asset: t.String()
+    })
   })
 
   // Get all deposit addresses
@@ -98,26 +97,29 @@ export const walletRoutes = new Elysia({ prefix: '/wallet' })
   .get('/transactions', async (context) => {
     try {
       const user = await authGuard(context)
-      const query = transactionHistorySchema.parse(context.query)
+      const query = context.query
+      
+      const limit = query.limit ? parseInt(query.limit as string) : 50
+      const offset = query.offset ? parseInt(query.offset as string) : 0
       
       const transactions = await prisma.transaction.findMany({
         where: {
           userId: user.id,
-          ...(query.chain && { chain: query.chain }),
-          ...(query.asset && { asset: query.asset }),
-          ...(query.txType && { txType: query.txType })
+          ...(query.chain && { chain: query.chain as string }),
+          ...(query.asset && { asset: query.asset as string }),
+          ...(query.txType && { txType: query.txType as string })
         },
         orderBy: { createdAt: 'desc' },
-        take: query.limit,
-        skip: query.offset
+        take: limit,
+        skip: offset
       })
 
       const total = await prisma.transaction.count({
         where: {
           userId: user.id,
-          ...(query.chain && { chain: query.chain }),
-          ...(query.asset && { asset: query.asset }),
-          ...(query.txType && { txType: query.txType })
+          ...(query.chain && { chain: query.chain as string }),
+          ...(query.asset && { asset: query.asset as string }),
+          ...(query.txType && { txType: query.txType as string })
         }
       })
 
@@ -139,8 +141,8 @@ export const walletRoutes = new Elysia({ prefix: '/wallet' })
             createdAt: tx.createdAt
           })),
           total,
-          limit: query.limit,
-          offset: query.offset
+          limit,
+          offset
         }
       }
     } catch (error) {
@@ -149,6 +151,14 @@ export const walletRoutes = new Elysia({ prefix: '/wallet' })
         message: error instanceof Error ? error.message : 'Failed to retrieve transaction history'
       }
     }
+  }, {
+    query: t.Object({
+      chain: t.Optional(t.String()),
+      asset: t.Optional(t.String()),
+      txType: t.Optional(t.String()),
+      limit: t.Optional(t.String()),
+      offset: t.Optional(t.String())
+    })
   })
 
   // Get live blockchain balances (for verification)
@@ -202,4 +212,25 @@ export const walletRoutes = new Elysia({ prefix: '/wallet' })
         message: error instanceof Error ? error.message : 'Failed to retrieve live balance'
       }
     }
+  })
+
+  // Withdraw funds
+  .post('/withdraw', async (context) => {
+    try {
+      const user = await authGuard(context)
+      return await walletService.initiateWithdrawal(user.id, context.body)
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : 'Failed to initiate withdrawal'
+      }
+    }
+  }, {
+    body: t.Object({
+      chain: t.String(),
+      asset: t.String(),
+      amount: t.String(),
+      toAddress: t.String(),
+      twoFactorToken: t.Optional(t.String())
+    })
   }) 

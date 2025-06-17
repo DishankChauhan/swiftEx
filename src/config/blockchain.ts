@@ -1,7 +1,5 @@
-import { BlockchainConfig } from '../types/wallet'
-
 // Blockchain network configuration
-export const blockchainConfig: BlockchainConfig = {
+export const blockchainConfig = {
   solana: {
     rpcUrl: process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com',
     network: (process.env.SOLANA_NETWORK as 'devnet' | 'testnet' | 'mainnet-beta') || 'devnet'

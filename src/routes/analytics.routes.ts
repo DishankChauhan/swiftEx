@@ -1,13 +1,6 @@
-import { Elysia } from 'elysia'
+import { Elysia, t } from 'elysia'
 import { analyticsService } from '../services/analytics.service'
 import { authMiddleware } from '../middleware/auth'
-import {
-  CandleQuerySchema,
-  MarketDepthQuerySchema,
-  AnalyticsQuerySchema,
-  TechnicalIndicatorQuerySchema,
-  timeIntervals
-} from '../types/analytics'
 
 export const analyticsRoutes = new Elysia({ prefix: '/analytics' })
 
@@ -22,27 +15,25 @@ export const analyticsRoutes = new Elysia({ prefix: '/analytics' })
   .get('/candles', async ({ query }) => {
     try {
       // Parse query parameters with proper type conversion
-      const parsedQuery = CandleQuerySchema.parse({
-        tradingPair: query.tradingPair,
-        interval: query.interval,
-        limit: query.limit ? parseInt(query.limit as string) : 100,
-        startTime: query.startTime ? parseInt(query.startTime as string) : undefined,
-        endTime: query.endTime ? parseInt(query.endTime as string) : undefined
-      })
+      const tradingPair = query.tradingPair as string
+      const interval = query.interval as string || '1h'
+      const limit = query.limit ? parseInt(query.limit as string) : 100
+      const startTime = query.startTime ? parseInt(query.startTime as string) : undefined
+      const endTime = query.endTime ? parseInt(query.endTime as string) : undefined
       
       const candles = await analyticsService.generateCandles(
-        parsedQuery.tradingPair,
-        parsedQuery.interval,
-        parsedQuery.limit,
-        parsedQuery.startTime,
-        parsedQuery.endTime
+        tradingPair,
+        interval,
+        limit,
+        startTime,
+        endTime
       )
 
       return {
         success: true,
         data: {
-          tradingPair: parsedQuery.tradingPair,
-          interval: parsedQuery.interval,
+          tradingPair,
+          interval,
           candles,
           count: candles.length,
           timestamp: Date.now()
@@ -55,6 +46,14 @@ export const analyticsRoutes = new Elysia({ prefix: '/analytics' })
         timestamp: Date.now()
       }
     }
+  }, {
+    query: t.Object({
+      tradingPair: t.String(),
+      interval: t.Optional(t.String()),
+      limit: t.Optional(t.String()),
+      startTime: t.Optional(t.String()),
+      endTime: t.Optional(t.String())
+    })
   })
 
   /**
@@ -67,31 +66,28 @@ export const analyticsRoutes = new Elysia({ prefix: '/analytics' })
       const indicatorsString = query.indicators as string || 'sma_20,rsi'
       const indicatorsArray = indicatorsString.split(',').map(i => i.trim())
       
-      const parsedQuery = TechnicalIndicatorQuerySchema.parse({
-        tradingPair: query.tradingPair,
-        interval: query.interval,
-        indicators: indicatorsArray,
-        limit: query.limit ? parseInt(query.limit as string) : 100
-      })
+      const tradingPair = query.tradingPair as string
+      const interval = query.interval as string || '1h'
+      const limit = query.limit ? parseInt(query.limit as string) : 100
       
       // First get the candle data
       const candles = await analyticsService.generateCandles(
-        parsedQuery.tradingPair,
-        parsedQuery.interval,
-        parsedQuery.limit
+        tradingPair,
+        interval,
+        limit
       )
 
       // Calculate technical indicators
       const indicators = await analyticsService.calculateTechnicalIndicators(
         candles,
-        parsedQuery.indicators
+        indicatorsArray
       )
 
       return {
         success: true,
         data: {
-          tradingPair: parsedQuery.tradingPair,
-          interval: parsedQuery.interval,
+          tradingPair,
+          interval,
           indicators: indicators.map((indicator, index) => ({
             timestamp: candles[index]?.timestamp,
             ...indicator
@@ -107,6 +103,13 @@ export const analyticsRoutes = new Elysia({ prefix: '/analytics' })
         timestamp: Date.now()
       }
     }
+  }, {
+    query: t.Object({
+      tradingPair: t.String(),
+      interval: t.Optional(t.String()),
+      indicators: t.Optional(t.String()),
+      limit: t.Optional(t.String())
+    })
   })
 
   // ====================
@@ -119,14 +122,12 @@ export const analyticsRoutes = new Elysia({ prefix: '/analytics' })
    */
   .get('/depth', async ({ query }) => {
     try {
-      const parsedQuery = MarketDepthQuerySchema.parse({
-        tradingPair: query.tradingPair,
-        limit: query.limit ? parseInt(query.limit as string) : 20
-      })
+      const tradingPair = query.tradingPair as string
+      const limit = query.limit ? parseInt(query.limit as string) : 20
       
       const depthAnalytics = await analyticsService.analyzeMarketDepth(
-        parsedQuery.tradingPair,
-        parsedQuery.limit
+        tradingPair,
+        limit
       )
 
       return {
@@ -140,6 +141,11 @@ export const analyticsRoutes = new Elysia({ prefix: '/analytics' })
         timestamp: Date.now()
       }
     }
+  }, {
+    query: t.Object({
+      tradingPair: t.String(),
+      limit: t.Optional(t.String())
+    })
   })
 
   /**
@@ -156,14 +162,12 @@ export const analyticsRoutes = new Elysia({ prefix: '/analytics' })
         }
       }
 
-      const parsedQuery = AnalyticsQuerySchema.parse({
-        tradingPair: query.tradingPair,
-        period: query.period || '1d'
-      })
+      const tradingPair = query.tradingPair as string
+      const period = query.period as string || '1d'
       
       const liquidityMetrics = await analyticsService.calculateLiquidityMetrics(
-        query.tradingPair as string,
-        parsedQuery.period
+        tradingPair,
+        period
       )
 
       return {
@@ -177,6 +181,11 @@ export const analyticsRoutes = new Elysia({ prefix: '/analytics' })
         timestamp: Date.now()
       }
     }
+  }, {
+    query: t.Object({
+      tradingPair: t.String(),
+      period: t.Optional(t.String())
+    })
   })
 
   // ====================
@@ -197,14 +206,12 @@ export const analyticsRoutes = new Elysia({ prefix: '/analytics' })
         }
       }
 
-      const parsedQuery = AnalyticsQuerySchema.parse({
-        tradingPair: query.tradingPair,
-        period: query.period || '1d'
-      })
+      const tradingPair = query.tradingPair as string
+      const period = query.period as string || '1d'
       
       const performanceAnalytics = await analyticsService.calculatePerformanceAnalytics(
-        query.tradingPair as string,
-        parsedQuery.period
+        tradingPair,
+        period
       )
 
       return {
@@ -218,6 +225,11 @@ export const analyticsRoutes = new Elysia({ prefix: '/analytics' })
         timestamp: Date.now()
       }
     }
+  }, {
+    query: t.Object({
+      tradingPair: t.String(),
+      period: t.Optional(t.String())
+    })
   })
 
   // ====================
@@ -304,7 +316,7 @@ export const analyticsRoutes = new Elysia({ prefix: '/analytics' })
         data: {
           pairs: tradingPairs,
           count: tradingPairs.length,
-          supportedIntervals: timeIntervals,
+          supportedIntervals: ['1m', '5m', '15m', '1h', '4h', '1d', '1w'],
           timestamp: Date.now()
         }
       }
@@ -410,7 +422,7 @@ export const analyticsRoutes = new Elysia({ prefix: '/analytics' })
             'sma_20', 'sma_50', 'ema_12', 'ema_26', 
             'rsi', 'macd', 'bollinger_bands'
           ],
-          supportedIntervals: timeIntervals,
+          supportedIntervals: ['1m', '5m', '15m', '1h', '4h', '1d', '1w'],
           supportedPeriods: ['1h', '4h', '1d', '7d', '30d'],
           dataRetention: {
             candles: '365 days',

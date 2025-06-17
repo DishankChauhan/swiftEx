@@ -1,12 +1,5 @@
-import { Elysia } from 'elysia'
+import { Elysia, t } from 'elysia'
 import { AuthService } from '../services/auth.service'
-import { 
-  registerSchema,
-  loginSchema,
-  setup2FASchema,
-  verify2FASchema,
-  disable2FASchema
-} from '../types/auth'
 import { verifyAccessToken } from '../utils/jwt'
 import { prisma } from '../config/database'
 
@@ -57,18 +50,31 @@ async function authGuard({ headers }: any) {
 export const authRoutes = new Elysia({ prefix: '/auth' })
   // Public routes
   .post('/register', async ({ body }) => {
-    const validatedData = registerSchema.parse(body)
-    return await authService.register(validatedData)
+    return await authService.register(body)
+  }, {
+    body: t.Object({
+      email: t.String(),
+      password: t.String()
+    })
   })
   
   .post('/login', async ({ body }) => {
-    const validatedData = loginSchema.parse(body)
-    return await authService.login(validatedData)
+    return await authService.login(body)
+  }, {
+    body: t.Object({
+      email: t.String(),
+      password: t.String()
+    })
   })
 
   .post('/login/2fa', async ({ body }) => {
-    const validatedData = verify2FASchema.parse(body)
-    return await authService.loginWith2FA(validatedData)
+    return await authService.loginWith2FA(body)
+  }, {
+    body: t.Object({
+      email: t.String(),
+      password: t.String(),
+      token: t.String()
+    })
   })
 
   .post('/refresh', async ({ body }) => {
@@ -80,6 +86,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       }
     }
     return await authService.refreshToken(refreshToken)
+  }, {
+    body: t.Object({
+      refreshToken: t.String()
+    })
   })
 
   .post('/logout', async ({ body }) => {
@@ -91,6 +101,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       }
     }
     return await authService.logout(refreshToken)
+  }, {
+    body: t.Object({
+      refreshToken: t.String()
+    })
   })
 
   // Protected routes
@@ -101,6 +115,23 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         success: true,
         message: 'Profile retrieved successfully',
         data: { user }
+      }
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : 'Authentication failed'
+      }
+    }
+  })
+
+  // Alias for /profile to match frontend expectations
+  .get('/me', async (context) => {
+    try {
+      const user = await authGuard(context)
+      return {
+        success: true,
+        message: 'User data retrieved successfully',
+        data: user
       }
     } catch (error) {
       return {
@@ -125,25 +156,32 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   .post('/2fa/enable', async (context) => {
     try {
       const user = await authGuard(context)
-      const validatedData = setup2FASchema.parse(context.body)
-      return await authService.enable2FA(user.id, validatedData)
+      return await authService.enable2FA(user.id, context.body)
     } catch (error) {
       return {
         success: false,
         message: error instanceof Error ? error.message : 'Authentication failed'
       }
     }
+  }, {
+    body: t.Object({
+      token: t.String()
+    })
   })
 
   .post('/2fa/disable', async (context) => {
     try {
       const user = await authGuard(context)
-      const validatedData = disable2FASchema.parse(context.body)
-      return await authService.disable2FA(user.id, validatedData)
+      return await authService.disable2FA(user.id, context.body)
     } catch (error) {
       return {
         success: false,
         message: error instanceof Error ? error.message : 'Authentication failed'
       }
     }
+  }, {
+    body: t.Object({
+      password: t.String(),
+      token: t.String()
+    })
   }) 

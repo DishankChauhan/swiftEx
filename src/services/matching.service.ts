@@ -1,78 +1,23 @@
 import { prisma } from '../config/database'
 import { ledgerService } from './ledger.service'
 import { orderBookService } from './orderbook.service'
-import {
-  OrderProcessingResult,
-  OrderMatch,
-  MatchingEngineConfig
-} from '../types/matching'
-import type { CreateOrder, Order } from '../types/ledger'
 import type { Prisma } from '@prisma/client'
 
 export class MatchingService {
   /**
    * Process a new order through the matching engine
    */
-  async processOrder(userId: string, orderData: CreateOrder): Promise<OrderProcessingResult> {
+  async processOrder(userId: string, orderData: any): Promise<any> {
     return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       try {
         // 1. Create the order in database first (with balance locking)
         const order = await ledgerService.createOrder(userId, orderData)
 
-        // 2. Find matches in the order book
-        const matches = await orderBookService.findMatches(order)
-
-        // 3. Process matches and update orders
-        const processedMatches = await this.executeMatches(order, matches, tx)
-
-        // 4. Calculate remaining amount after matches
-        const totalFilled = processedMatches.reduce(
-          (sum, match) => sum + parseFloat(match.amount), 
-          0
-        )
-        const remaining = parseFloat(order.remaining) - totalFilled
-
-        // 5. Update order status and filled amounts
-        let status: 'filled' | 'partial' | 'pending' = 'pending'
-        if (remaining <= 0) {
-          status = 'filled'
-        } else if (totalFilled > 0) {
-          status = 'partial'
-        }
-
-        const updatedOrder = await tx.order.update({
-          where: { id: order.id },
-          data: {
-            filled: totalFilled.toString(),
-            remaining: remaining.toString(),
-            status: status,
-            filledAt: status === 'filled' ? new Date() : null,
-            averagePrice: processedMatches.length > 0 
-              ? this.calculateAveragePrice(processedMatches).toString()
-              : null
-          }
-        })
-
-        // 6. Add remaining order to order book if not fully filled
-        if (remaining > 0) {
-          await orderBookService.addOrderToBook({
-            ...updatedOrder,
-            createdAt: updatedOrder.createdAt,
-            updatedAt: updatedOrder.updatedAt,
-            filledAt: updatedOrder.filledAt,
-            cancelledAt: updatedOrder.cancelledAt
-          })
-        }
-
-        return {
-          orderId: order.id,
-          status,
-          filled: totalFilled.toString(),
-          remaining: remaining.toString(),
-          averagePrice: processedMatches.length > 0 
-            ? this.calculateAveragePrice(processedMatches).toString()
-            : undefined,
-          matches: processedMatches
+        // 2. Handle market orders vs limit orders differently
+        if (orderData.orderType === 'market') {
+          return await this.processMarketOrder(order, tx)
+        } else {
+          return await this.processLimitOrder(order, tx)
         }
 
       } catch (error) {
@@ -83,14 +28,174 @@ export class MatchingService {
   }
 
   /**
+   * Process a market order - execute immediately at best available prices
+   */
+  private async processMarketOrder(order: any, tx: Prisma.TransactionClient): Promise<any> {
+    // Market orders execute immediately against the order book
+    const matches = await orderBookService.findMarketMatches(order)
+
+    if (!matches || matches.length === 0) {
+      // No matches available, reject the market order
+      throw new Error('No liquidity available for market order')
+    }
+
+    // Process all available matches
+    const processedMatches = await this.executeMatches(order, matches, tx)
+
+    // Calculate final state
+    const totalFilled = processedMatches.reduce(
+      (sum, match) => sum + parseFloat(match.amount), 
+      0
+    )
+    const remaining = parseFloat(order.remaining) - totalFilled
+
+    // Market orders are either filled or partially filled, never pending
+    let status: 'filled' | 'partial' = remaining <= 0 ? 'filled' : 'partial'
+
+    // Update the order in database
+    const updatedOrder = await tx.order.update({
+      where: { id: order.id },
+      data: {
+        filled: totalFilled.toString(),
+        remaining: remaining.toString(),
+        status: status,
+        filledAt: new Date(),
+        averagePrice: processedMatches.length > 0 
+          ? this.calculateAveragePrice(processedMatches).toString()
+          : null
+      }
+    })
+
+    // Market orders never go to the order book
+    // If partially filled, unlock the remaining locked balance
+    if (remaining > 0) {
+      await this.unlockRemainingMarketOrderBalance(order, remaining, tx)
+    }
+
+    return {
+      orderId: order.id,
+      status,
+      filled: totalFilled.toString(),
+      remaining: remaining.toString(),
+      averagePrice: processedMatches.length > 0 
+        ? this.calculateAveragePrice(processedMatches).toString()
+        : undefined,
+      matches: processedMatches
+    }
+  }
+
+  /**
+   * Process a limit order - normal order book behavior
+   */
+  private async processLimitOrder(order: any, tx: Prisma.TransactionClient): Promise<any> {
+    // Find matches in the order book
+    const matches = await orderBookService.findMatches(order)
+
+    // Process matches and update orders
+    const processedMatches = await this.executeMatches(order, matches, tx)
+
+    // Calculate remaining amount after matches
+    const totalFilled = processedMatches.reduce(
+      (sum, match) => sum + parseFloat(match.amount), 
+      0
+    )
+    const remaining = parseFloat(order.remaining) - totalFilled
+
+    // Update order status and filled amounts
+    let status: 'filled' | 'partial' | 'pending' = 'pending'
+    if (remaining <= 0) {
+      status = 'filled'
+    } else if (totalFilled > 0) {
+      status = 'partial'
+    }
+
+    const updatedOrder = await tx.order.update({
+      where: { id: order.id },
+      data: {
+        filled: totalFilled.toString(),
+        remaining: remaining.toString(),
+        status: status,
+        filledAt: status === 'filled' ? new Date() : null,
+        averagePrice: processedMatches.length > 0 
+          ? this.calculateAveragePrice(processedMatches).toString()
+          : null
+      }
+    })
+
+    // Add remaining order to order book if not fully filled
+    if (remaining > 0) {
+      await orderBookService.addOrderToBook({
+        ...updatedOrder,
+        createdAt: updatedOrder.createdAt,
+        updatedAt: updatedOrder.updatedAt,
+        filledAt: updatedOrder.filledAt,
+        cancelledAt: updatedOrder.cancelledAt
+      })
+    }
+
+    return {
+      orderId: order.id,
+      status,
+      filled: totalFilled.toString(),
+      remaining: remaining.toString(),
+      averagePrice: processedMatches.length > 0 
+        ? this.calculateAveragePrice(processedMatches).toString()
+        : undefined,
+      matches: processedMatches
+    }
+  }
+
+  /**
+   * Unlock remaining balance for partially filled market orders
+   */
+  private async unlockRemainingMarketOrderBalance(
+    order: any, 
+    remaining: number, 
+    tx: Prisma.TransactionClient
+  ): Promise<void> {
+    const [baseAsset, quoteAsset] = order.tradingPair.split('/')
+    
+    if (order.side === 'buy') {
+      // For buy market orders, we need to estimate how much USDC to unlock
+      // This is tricky since we don't know the exact cost of remaining amount
+      // We'll use a conservative approach and unlock based on locked amount ratio
+      const filledRatio = (parseFloat(order.amount) - remaining) / parseFloat(order.amount)
+      const totalLocked = parseFloat(order.lockedAmount)
+      const shouldRemainLocked = totalLocked * filledRatio
+      const toUnlock = totalLocked - shouldRemainLocked
+      
+      if (toUnlock > 0) {
+        await ledgerService.executeBalanceOperation({
+          userId: order.userId,
+          asset: quoteAsset,
+          amount: toUnlock.toString(),
+          operation: 'unlock',
+          orderId: order.id,
+          description: `Unlock remaining ${quoteAsset} from partially filled market buy order`
+        })
+      }
+    } else {
+      // For sell market orders, unlock the remaining base asset amount
+      await ledgerService.executeBalanceOperation({
+        userId: order.userId,
+        asset: baseAsset,
+        amount: remaining.toString(),
+        operation: 'unlock',
+        orderId: order.id,
+        description: `Unlock remaining ${baseAsset} from partially filled market sell order`
+      })
+    }
+  }
+
+  /**
    * Execute order matches and update balances
    */
   private async executeMatches(
-    takerOrder: Order,
-    matches: OrderMatch[],
+    takerOrder: any,
+    matches: any[],
     tx: Prisma.TransactionClient
-  ): Promise<OrderMatch[]> {
-    const processedMatches: OrderMatch[] = []
+  ): Promise<any[]> {
+    const processedMatches: any[] = []
 
     for (const match of matches) {
       try {
@@ -170,9 +275,9 @@ export class MatchingService {
    * Update balances for a completed trade
    */
   private async updateBalancesForTrade(
-    takerOrder: Order,
-    makerOrder: Order,
-    match: OrderMatch,
+    takerOrder: any,
+    makerOrder: any,
+    match: any,
     tx: Prisma.TransactionClient
   ): Promise<void> {
     const [baseAsset, quoteAsset] = takerOrder.tradingPair.split('/')
@@ -302,7 +407,7 @@ export class MatchingService {
   /**
    * Cancel an order and remove from order book
    */
-  async cancelOrder(userId: string, orderId: string): Promise<Order> {
+  async cancelOrder(userId: string, orderId: string): Promise<any> {
     return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // First cancel in database (this unlocks funds)
       const cancelledOrder = await ledgerService.cancelOrder(userId, orderId)
@@ -317,46 +422,52 @@ export class MatchingService {
   /**
    * Calculate average execution price for matches
    */
-  private calculateAveragePrice(matches: OrderMatch[]): number {
-    let totalValue = 0
-    let totalAmount = 0
+  private calculateAveragePrice(matches: any[]): number {
+    if (matches.length === 0) return 0
 
-    for (const match of matches) {
-      const amount = parseFloat(match.amount)
-      const price = parseFloat(match.price)
-      totalValue += amount * price
-      totalAmount += amount
-    }
+    const totalValue = matches.reduce(
+      (sum, match) => sum + (parseFloat(match.amount) * parseFloat(match.price)), 
+      0
+    )
+    const totalAmount = matches.reduce(
+      (sum, match) => sum + parseFloat(match.amount), 
+      0
+    )
 
-    return totalAmount > 0 ? totalValue / totalAmount : 0
+    return totalValue / totalAmount
   }
 
   /**
-   * Calculate maker fee (typically lower than taker fee)
+   * Calculate maker fee (0.1%)
    */
   private calculateMakerFee(amount: string, price: string): number {
-    const tradeValue = parseFloat(amount) * parseFloat(price)
-    return tradeValue * 0.0005 // 0.05% maker fee (half of taker fee)
+    return parseFloat(amount) * parseFloat(price) * 0.001
   }
 
   /**
    * Get matching engine configuration for a trading pair
    */
-  async getMatchingConfig(tradingPair: string): Promise<MatchingEngineConfig | null> {
+  async getMatchingConfig(tradingPair: string): Promise<any | null> {
     const pair = await prisma.tradingPair.findUnique({
-      where: { symbol: tradingPair }
+      where: { symbol: tradingPair },
+      include: {
+        baseAssetConfig: true,
+        quoteAssetConfig: true
+      }
     })
 
     if (!pair) return null
 
     return {
       tradingPair: pair.symbol,
+      baseAsset: pair.baseAsset,
+      quoteAsset: pair.quoteAsset,
+      minOrderSize: pair.minOrderSize,
+      maxOrderSize: pair.maxOrderSize,
       priceStep: pair.priceStep,
       sizeStep: pair.sizeStep,
       makerFee: pair.makerFee,
-      takerFee: pair.takerFee,
-      minOrderSize: pair.minOrderSize,
-      maxOrderSize: pair.maxOrderSize
+      takerFee: pair.takerFee
     }
   }
 

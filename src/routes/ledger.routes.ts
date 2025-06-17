@@ -1,21 +1,12 @@
 import { Elysia, t } from 'elysia'
 import { ledgerService } from '../services/ledger.service'
 import { authMiddleware } from '../middleware/auth'
-import {
-  CreateAssetConfigSchema,
-  CreateTradingPairSchema,
-  CreateOrderSchema,
-  UpdateOrderSchema,
-  InternalTransferSchema,
-  BalanceOperationSchema
-} from '../types/ledger'
 
 export const ledgerRoutes = new Elysia({ prefix: '/ledger' })
   // Asset Configuration Routes (Admin only for now)
   .post('/assets', async ({ body }: { body: any }) => {
     try {
-      const validatedData = CreateAssetConfigSchema.parse(body)
-      const asset = await ledgerService.createAssetConfig(validatedData)
+      const asset = await ledgerService.createAssetConfig(body)
       
       return {
         success: true,
@@ -88,8 +79,7 @@ export const ledgerRoutes = new Elysia({ prefix: '/ledger' })
   // Trading Pair Routes
   .post('/trading-pairs', async ({ body }: { body: any }) => {
     try {
-      const validatedData = CreateTradingPairSchema.parse(body)
-      const tradingPair = await ledgerService.createTradingPair(validatedData)
+      const tradingPair = await ledgerService.createTradingPair(body)
       
       return {
         success: true,
@@ -163,8 +153,7 @@ export const ledgerRoutes = new Elysia({ prefix: '/ledger' })
   .post('/orders', async ({ body, headers }: { body: any; headers: any }) => {
     try {
       const auth = await authMiddleware({ headers })
-      const validatedData = CreateOrderSchema.parse(body)
-      const order = await ledgerService.createOrder(auth.user.id, validatedData)
+      const order = await ledgerService.createOrder(auth.user.id, body)
       
       return {
         success: true,
@@ -313,9 +302,8 @@ export const ledgerRoutes = new Elysia({ prefix: '/ledger' })
     try {
       const auth = await authMiddleware({ headers })
       const transferData = { ...body, fromUserId: auth.user.id }
-      const validatedData = InternalTransferSchema.parse(transferData)
       
-      await ledgerService.internalTransfer(validatedData)
+      await ledgerService.internalTransfer(transferData)
       
       return {
         success: true,
@@ -385,8 +373,15 @@ export const ledgerRoutes = new Elysia({ prefix: '/ledger' })
   // Manual Balance Operations (Admin only for now)
   .post('/balance/operation', async ({ body }: { body: any }) => {
     try {
-      const validatedData = BalanceOperationSchema.parse(body)
-      await ledgerService.executeBalanceOperation(validatedData)
+      const { userId, asset, amount, operation, description } = body
+      
+      await ledgerService.executeBalanceOperation({
+        userId,
+        asset,
+        amount,
+        operation,
+        description
+      })
       
       return {
         success: true,
@@ -402,10 +397,9 @@ export const ledgerRoutes = new Elysia({ prefix: '/ledger' })
   }, {
     body: t.Object({
       userId: t.String(),
-      asset: t.String(),
+      asset: t.String(), 
       amount: t.String(),
-      operation: t.Union([t.Literal('lock'), t.Literal('unlock'), t.Literal('add'), t.Literal('subtract')]),
-      orderId: t.Optional(t.String()),
+      operation: t.Union([t.Literal('credit'), t.Literal('debit')]),
       description: t.Optional(t.String())
     })
   })

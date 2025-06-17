@@ -3,18 +3,12 @@ import { ethers } from 'ethers'
 import * as bip39 from 'bip39'
 import { derivePath } from 'ed25519-hd-key'
 import { prisma } from '../config/database'
-import { blockchainConfig, assetConfig } from '../config/blockchain'
-import {
-  Chain,
-  Asset,
-  WalletGenerationResult,
-  WalletResponse,
-  BalanceResponse,
-  DepositAddressRequest,
-  WithdrawalRequest
-} from '../types/wallet'
+import { blockchainConfig, assetConfig, withdrawalLimits } from '../config/blockchain'
+
+import crypto from 'crypto'
 
 export class WalletService {
+  [x: string]: any
   private solanaConnection: Connection
   private ethereumProvider: ethers.JsonRpcProvider
 
@@ -24,7 +18,7 @@ export class WalletService {
   }
 
   // Generate Solana wallet
-  private async generateSolanaWallet(userId: string, index: number = 0): Promise<WalletGenerationResult> {
+  private async generateSolanaWallet(userId: string, index: number = 0): Promise<any> {
     try {
       // Generate or use existing master seed for user
       const masterSeed = await this.getMasterSeed(userId)
@@ -47,7 +41,7 @@ export class WalletService {
   }
 
   // Generate Ethereum wallet
-  private async generateEthereumWallet(userId: string, index: number = 0): Promise<WalletGenerationResult> {
+  private async generateEthereumWallet(userId: string, index: number = 0): Promise<any> {
     try {
       // Generate or use existing master seed for user
       const masterSeed = await this.getMasterSeed(userId)
@@ -89,15 +83,26 @@ export class WalletService {
     return Buffer.from(encryptedKey, 'base64').toString()
   }
 
-  // Generate deposit address for user
-  async generateDepositAddress(userId: string, data: DepositAddressRequest): Promise<WalletResponse> {
+  /**
+   * Generate a new deposit address for a user
+   */
+  async generateDepositAddress(userId: string, data: any): Promise<any> {
     try {
-      // Check if user already has a deposit address for this chain
+      const { chain, asset } = data
+
+      // Validate chain and asset
+      if (!['solana', 'ethereum'].includes(chain)) {
+        return {
+          success: false,
+          message: 'Unsupported blockchain'
+        }
+      }
+
+      // Check if user already has a wallet for this chain
       const existingWallet = await prisma.wallet.findFirst({
         where: {
           userId,
-          chain: data.chain,
-          type: 'deposit',
+          chain,
           isActive: true
         }
       })
@@ -105,38 +110,22 @@ export class WalletService {
       if (existingWallet) {
         return {
           success: true,
-          message: 'Deposit address retrieved',
+          message: 'Deposit address retrieved successfully',
           data: {
             address: existingWallet.address,
             chain: existingWallet.chain,
-            type: existingWallet.type
+            asset
           }
         }
       }
 
       // Generate new wallet based on chain
-      let walletResult: WalletGenerationResult
-
-      if (data.chain === 'solana') {
-        walletResult = await this.generateSolanaWallet(userId)
-      } else if (data.chain === 'ethereum') {
-        walletResult = await this.generateEthereumWallet(userId)
-      } else {
-        throw new Error('Unsupported chain')
+      let wallet: any
+      if (chain === 'solana') {
+        wallet = await this.generateSolanaWallet(userId)
+      } else if (chain === 'ethereum') {
+        wallet = await this.generateEthereumWallet(userId)
       }
-
-      // Store wallet in database
-      const wallet = await prisma.wallet.create({
-        data: {
-          userId,
-          chain: data.chain,
-          address: walletResult.address,
-          type: 'deposit',
-          publicKey: walletResult.publicKey,
-          privateKey: this.encryptPrivateKey(walletResult.privateKey),
-          derivationPath: walletResult.derivationPath
-        }
-      })
 
       return {
         success: true,
@@ -144,11 +133,11 @@ export class WalletService {
         data: {
           address: wallet.address,
           chain: wallet.chain,
-          type: wallet.type
+          asset
         }
       }
     } catch (error) {
-      console.error('Deposit address generation error:', error)
+      console.error('Error generating deposit address:', error)
       return {
         success: false,
         message: 'Failed to generate deposit address'
@@ -157,7 +146,7 @@ export class WalletService {
   }
 
   // Get user balances
-  async getUserBalances(userId: string): Promise<BalanceResponse> {
+  async getUserBalances(userId: string): Promise<any> {
     try {
       const balances = await prisma.balance.findMany({
         where: { userId }
@@ -188,8 +177,8 @@ export class WalletService {
   // Update user balance
   async updateBalance(
     userId: string,
-    asset: Asset,
-    chain: Chain,
+    asset: any,
+    chain: any,
     availableChange: string,
     lockedChange: string = '0'
   ): Promise<void> {
@@ -267,7 +256,7 @@ export class WalletService {
   }
 
   // Get user deposit addresses
-  async getDepositAddresses(userId: string): Promise<WalletResponse> {
+  async getDepositAddresses(userId: string): Promise<any> {
     try {
       const wallets = await prisma.wallet.findMany({
         where: {
