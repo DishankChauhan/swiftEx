@@ -15,6 +15,7 @@
     "test:phase3": "bun test-phase3.js",
     "test:phase4": "bun test-phase4.js",
     "market-maker": "bun src/services/market-maker.service.ts"
+
   },
   "dependencies": {
     "@elysiajs/cookie": "^0.8.0",
