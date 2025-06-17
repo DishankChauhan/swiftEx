@@ -18,6 +18,7 @@ import {
   Settings
 } from 'lucide-react'
 import { toast } from 'sonner'
+import React from 'react'
 
 interface Balance {
   asset: string
@@ -49,6 +50,7 @@ export default function DashboardPage() {
   const [recentTrades, setRecentTrades] = useState<Trade[]>([])
   const [isConnected, setIsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
+  const lastProcessedPriceRef = useRef<number>(0)
   const [orderForm, setOrderForm] = useState({
     side: 'buy' as 'buy' | 'sell',
     amount: '',
@@ -56,6 +58,15 @@ export default function DashboardPage() {
     orderType: 'limit' as 'limit' | 'market'
   })
   const [priceHistory, setPriceHistory] = useState<Array<{timestamp: number, price: number}>>([])
+  const [candleData, setCandleData] = useState<Array<{
+    timestamp: number
+    open: number
+    high: number
+    low: number
+    close: number
+    volume: number
+    isComplete: boolean
+  }>>([])
 
   // WebSocket connection for real-time updates
   useEffect(() => {
@@ -276,6 +287,135 @@ export default function DashboardPage() {
     }
   }, [marketData, selectedPair])
 
+  // Fetch candlestick data - load once and stream updates
+  useEffect(() => {
+    const fetchInitialCandleData = async () => {
+      try {
+        console.log('📊 Loading initial candlestick data...')
+        
+        // Reset price tracking for new pair
+        lastProcessedPriceRef.current = 0
+        
+        const response = await fetch(`http://localhost:3001/analytics/candles?tradingPair=${selectedPair}&interval=1h&limit=50`)
+        const result = await response.json()
+        
+        if (result.success && result.data.candles) {
+          const formattedCandles = result.data.candles.map((candle: any) => ({
+            timestamp: candle.timestamp,
+            open: parseFloat(candle.open),
+            high: parseFloat(candle.high),
+            low: parseFloat(candle.low),
+            close: parseFloat(candle.close),
+            volume: parseFloat(candle.volume),
+            isComplete: true // Historical candles are complete
+          }))
+          
+          // Sort by timestamp to ensure chronological order
+          formattedCandles.sort((a: {timestamp: number}, b: {timestamp: number}) => a.timestamp - b.timestamp)
+          
+          // Mark the last candle as current (incomplete)
+          if (formattedCandles.length > 0) {
+            formattedCandles[formattedCandles.length - 1].isComplete = false
+          }
+          
+          console.log('✅ Historical candles loaded:', formattedCandles.length)
+          setCandleData(formattedCandles)
+        }
+      } catch (error) {
+        console.error('Failed to fetch initial candle data:', error)
+      }
+    }
+
+    // Only load initial data once when component mounts or pair changes
+    fetchInitialCandleData()
+  }, [selectedPair]) // Only depend on selectedPair, not marketData
+
+  // Real-time price streaming for current candle
+  useEffect(() => {
+    const currentPrice = marketData?.[selectedPair]
+    if (!currentPrice || currentPrice <= 0) {
+      return
+    }
+
+    // Only process if price changed significantly (more than 0.01 cents)
+    const priceDiff = Math.abs(currentPrice - lastProcessedPriceRef.current)
+    if (priceDiff < 0.01) {
+      return
+    }
+
+    console.log('💰 Streaming price update:', currentPrice, 'diff:', priceDiff)
+    lastProcessedPriceRef.current = currentPrice
+    
+    // Update only the current (last) candle with real-time price
+    setCandleData(prev => {
+      if (prev.length === 0) return prev
+      
+      const updated = [...prev]
+      const currentCandle = { ...updated[updated.length - 1] }
+      
+      // Only update if this is the current incomplete candle
+      if (!currentCandle.isComplete) {
+        currentCandle.close = currentPrice
+        currentCandle.high = Math.max(currentCandle.high, currentPrice)
+        currentCandle.low = Math.min(currentCandle.low, currentPrice)
+        
+        updated[updated.length - 1] = currentCandle
+        return updated
+      }
+      
+      return prev
+    })
+  }, [marketData?.[selectedPair], selectedPair]) // Keep selectedPair to handle pair changes
+
+  // Periodically add new candles (every hour for 1h candles)
+  useEffect(() => {
+    const addNewCandleInterval = setInterval(() => {
+      const currentPrice = marketData?.[selectedPair]
+      if (!currentPrice) return
+
+      setCandleData(prev => {
+        if (prev.length === 0) return prev
+
+        const now = Date.now()
+        const lastCandle = prev[prev.length - 1]
+        const hourStart = Math.floor(now / (60 * 60 * 1000)) * (60 * 60 * 1000)
+        const lastCandleHour = Math.floor(lastCandle.timestamp / (60 * 60 * 1000)) * (60 * 60 * 1000)
+
+        // If we're in a new hour, complete the current candle and start a new one
+        if (hourStart > lastCandleHour) {
+          console.log('🕐 Starting new hourly candle')
+          const updated = [...prev]
+          
+          // Mark the last candle as complete
+          updated[updated.length - 1] = {
+            ...updated[updated.length - 1],
+            isComplete: true
+          }
+          
+          // Add new current candle
+          const newCandle = {
+            timestamp: hourStart,
+            open: currentPrice,
+            high: currentPrice,
+            low: currentPrice,
+            close: currentPrice,
+            volume: 0,
+            isComplete: false
+          }
+          
+          updated.push(newCandle)
+          
+          // Keep only last 50 candles for performance
+          return updated.slice(-50)
+        }
+        
+        return prev
+      })
+    }, 60000) // Check every minute
+
+    return () => clearInterval(addNewCandleInterval)
+  }, [selectedPair]) // Remove candleData and marketData from dependencies
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -291,78 +431,249 @@ export default function DashboardPage() {
   const baseAsset = selectedPair.split('/')[0]
   const quoteAsset = selectedPair.split('/')[1]
 
-  // Create simple chart component
-  const SimpleChart = ({ data }: { data: Array<{timestamp: number, price: number}> }) => {
+  // Enhanced chart component with proper candlesticks - memoized for performance
+  const CandlestickChart = React.memo(({ data }: { data: Array<{timestamp: number, open: number, high: number, low: number, close: number, volume: number, isComplete: boolean}> }) => {
+    const { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, Bar, ReferenceLine } = require('recharts')
+    
     if (data.length < 2) {
       return (
-        <div className="h-64 bg-gray-700 rounded-lg flex items-center justify-center">
+        <div className="h-96 bg-gray-800 rounded-lg flex items-center justify-center">
           <div className="text-center">
             <BarChart3 className="h-16 w-16 text-gray-500 mx-auto mb-4" />
-            <p className="text-gray-400">Collecting price data...</p>
+            <p className="text-gray-400">Loading candlestick data...</p>
             <p className="text-3xl font-bold text-white mt-4">${formatPrice(currentPrice)}</p>
           </div>
         </div>
       )
     }
 
-    const maxPrice = Math.max(...data.map(d => d.price))
-    const minPrice = Math.min(...data.map(d => d.price))
-    const priceRange = maxPrice - minPrice || 0.01 // Prevent division by zero
     const latest = data[data.length - 1]
-    const previous = data[data.length - 2]
-    const change = latest.price - previous.price
-    const changePercent = ((change / previous.price) * 100)
+    const previous = data[data.length - 2] 
+    const change = latest.close - previous.close
+    const changePercent = ((change / previous.close) * 100)
 
-    // Safely calculate Y positions to avoid NaN
-    const calculateY = (price: number) => {
-      if (priceRange === 0 || isNaN(price) || !isFinite(price)) return 50 // Center line if no price variation or invalid price
-      const y = 100 - ((price - minPrice) / priceRange) * 100
-      return Math.max(0, Math.min(100, y)) // Clamp between 0 and 100
-    }
+    // Memoize chart data to prevent recalculation on every render
+    const chartData = React.useMemo(() => 
+      data.map((candle, index) => ({
+        ...candle,
+        time: new Date(candle.timestamp).toLocaleTimeString('en-US', { 
+          hour: '2-digit', 
+          minute: '2-digit',
+          hour12: false 
+        }),
+        date: new Date(candle.timestamp).toLocaleDateString(),
+        index
+      })), [data]
+    )
+
+    // Memoize price range calculation
+    const priceRange = React.useMemo(() => {
+      const allPrices = data.flatMap(d => [d.open, d.high, d.low, d.close])
+      const minPrice = Math.min(...allPrices)
+      const maxPrice = Math.max(...allPrices)
+      const padding = (maxPrice - minPrice) * 0.05
+      return { minPrice, maxPrice, padding }
+    }, [data])
+
+    // Custom candlestick component - memoized with live candle styling
+    const CandlestickBar = React.useCallback((props: any) => {
+      const { payload, x, y, width, height } = props
+      if (!payload || !payload.open || !payload.high || !payload.low || !payload.close) return null
+
+      const { open, high, low, close, isComplete } = payload
+      const isGreen = close >= open
+      const baseColor = isGreen ? '#10b981' : '#ef4444'
+      
+      // Add visual distinction for live (incomplete) candles
+      const color = isComplete ? baseColor : baseColor
+      const opacity = isComplete ? 1 : 0.9
+      const strokeWidth = isComplete ? 0.5 : 1
+      
+      // Calculate the scale
+      const dataMin = priceRange.minPrice
+      const dataMax = priceRange.maxPrice
+      const range = dataMax - dataMin
+      
+      if (range === 0) return null
+      
+      // Calculate positions
+      const candleWidth = Math.max(2, width * 0.8)
+      const wickWidth = isComplete ? 1 : 1.5 // Slightly thicker wick for live candle
+      const centerX = x + width / 2
+      
+      // Calculate Y positions (Recharts handles the scaling)
+      const scaleY = (price: number) => {
+        const ratio = (dataMax - price) / range
+        return y + ratio * height
+      }
+      
+      const highY = scaleY(high)
+      const lowY = scaleY(low)
+      const openY = scaleY(open)
+      const closeY = scaleY(close)
+      
+      const bodyTop = Math.min(openY, closeY)
+      const bodyHeight = Math.abs(openY - closeY)
+      
+      return (
+        <g opacity={opacity}>
+          {/* High-Low wick */}
+          <line
+            x1={centerX}
+            y1={highY}
+            x2={centerX}
+            y2={lowY}
+            stroke={color}
+            strokeWidth={wickWidth}
+          />
+          
+          {/* Open-Close body */}
+          <rect
+            x={centerX - candleWidth / 2}
+            y={bodyTop}
+            width={candleWidth}
+            height={Math.max(bodyHeight, 1)}
+            fill={color}
+            stroke={color}
+            strokeWidth={strokeWidth}
+          />
+          
+          {/* Add pulse effect for live candle */}
+          {!isComplete && (
+            <rect
+              x={centerX - candleWidth / 2}
+              y={bodyTop}
+              width={candleWidth}
+              height={Math.max(bodyHeight, 1)}
+              fill="none"
+              stroke={color}
+              strokeWidth={2}
+              opacity={0.3}
+              className="animate-pulse"
+            />
+          )}
+        </g>
+      )
+    }, [priceRange])
 
     return (
-      <div className="h-64 bg-gray-700 rounded-lg p-4">
+      <div className="h-96 bg-gray-800 rounded-lg p-4">
         <div className="flex justify-between items-center mb-4">
           <div>
-            <div className="text-2xl font-bold text-white">${formatPrice(latest.price)}</div>
-            <div className={`text-sm ${change >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-              {change >= 0 ? '+' : ''}{change.toFixed(2)} ({changePercent >= 0 ? '+' : ''}{changePercent.toFixed(2)}%)
+            <div className="text-3xl font-bold text-white">${formatPrice(latest.close)}</div>
+            <div className={`text-lg flex items-center ${change >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {change >= 0 ? <TrendingUp className="h-5 w-5 mr-2" /> : <TrendingDown className="h-5 w-5 mr-2" />}
+              <span className="font-semibold">
+                {change >= 0 ? '+' : ''}{change.toFixed(2)} ({changePercent >= 0 ? '+' : ''}{changePercent.toFixed(2)}%)
+              </span>
+              {!latest.isComplete && (
+                <div className="ml-2 px-2 py-1 bg-blue-600 text-white text-xs rounded-full animate-pulse">
+                  LIVE
+                </div>
+              )}
             </div>
           </div>
-          <div className="text-right">
-            <div className="text-xs text-gray-400">H: ${formatPrice(maxPrice)}</div>
-            <div className="text-xs text-gray-400">L: ${formatPrice(minPrice)}</div>
+          <div className="text-right text-sm">
+            <div className="text-gray-300">
+              <span className="text-gray-400">High:</span> <span className="text-white font-mono">${formatPrice(Math.max(...data.map(d => d.high)))}</span>
+            </div>
+            <div className="text-gray-300">
+              <span className="text-gray-400">Low:</span> <span className="text-white font-mono">${formatPrice(Math.min(...data.map(d => d.low)))}</span>
+            </div>
+            <div className="text-gray-300">
+              <span className="text-gray-400">Volume:</span> <span className="text-white font-mono">{formatPrice(latest.volume)}</span>
+            </div>
           </div>
         </div>
         
-        <svg className="w-full h-32" viewBox="0 0 400 100">
-          <polyline
-            points={data.map((point, index) => {
-              const x = (index / (data.length - 1)) * 400
-              const y = calculateY(point.price)
-              return `${x},${y}`
-            }).join(' ')}
-            fill="none"
-            stroke={change >= 0 ? "#10b981" : "#ef4444"}
-            strokeWidth="2"
-          />
-          <circle
-            cx="400"
-            cy={calculateY(latest.price)}
-            r="3"
-            fill={change >= 0 ? "#10b981" : "#ef4444"}
-          />
-        </svg>
+        <ResponsiveContainer width="100%" height={300}>
+          <ComposedChart data={chartData} margin={{ top: 20, right: 20, left: 20, bottom: 40 }}>
+            <CartesianGrid strokeDasharray="2 4" stroke="#374151" opacity={0.3} />
+            
+            <XAxis 
+              dataKey="time"
+              tick={{ fontSize: 11, fill: '#9CA3AF' }}
+              tickLine={{ stroke: '#4B5563' }}
+              axisLine={{ stroke: '#4B5563' }}
+              interval="preserveStartEnd"
+              tickMargin={8}
+            />
+            
+            <YAxis 
+              domain={[priceRange.minPrice - priceRange.padding, priceRange.maxPrice + priceRange.padding]}
+              tick={{ fontSize: 11, fill: '#9CA3AF' }}
+              tickLine={{ stroke: '#4B5563' }}
+              axisLine={{ stroke: '#4B5563' }}
+              tickFormatter={(value: number) => `$${value.toFixed(2)}`}
+              width={60}
+            />
+            
+            <Tooltip 
+              contentStyle={{ 
+                backgroundColor: '#1F2937', 
+                border: '1px solid #374151',
+                borderRadius: '8px',
+                boxShadow: '0 10px 25px rgba(0,0,0,0.3)'
+              }}
+              content={({ active, payload, label }: any) => {
+                if (active && payload && payload[0]) {
+                  const data = payload[0].payload
+                  const isGreen = data.close >= data.open
+                  return (
+                    <div className="bg-gray-800 p-3 rounded-lg border border-gray-600 min-w-[200px]">
+                      <p className="text-white font-semibold mb-2">{data.date} {label}</p>
+                      <div className="space-y-1 text-sm">
+                        <div className="flex justify-between">
+                          <span className="text-gray-400">Open:</span>
+                          <span className="text-white font-mono">${parseFloat(data.open).toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-400">High:</span>
+                          <span className="text-blue-400 font-mono">${parseFloat(data.high).toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-400">Low:</span>
+                          <span className="text-orange-400 font-mono">${parseFloat(data.low).toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-400">Close:</span>
+                          <span className={`font-mono ${isGreen ? 'text-green-400' : 'text-red-400'}`}>
+                            ${parseFloat(data.close).toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between pt-1 border-t border-gray-600">
+                          <span className="text-gray-400">Volume:</span>
+                          <span className="text-gray-300 font-mono">{parseFloat(data.volume).toFixed(0)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                }
+                return null
+              }}
+            />
+            
+            {/* Invisible bars for positioning, but use Bar with custom shape */}
+            <Bar 
+              dataKey="high"
+              fill="transparent"
+              shape={<CandlestickBar />}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
         
-        <div className="flex justify-between text-xs text-gray-400 mt-2">
-          <span>Market Maker Active</span>
+        <div className="flex justify-between text-xs text-gray-400 mt-3 pt-2 border-t border-gray-700">
+          <span className="flex items-center">
+            <div className={`w-2 h-2 rounded-full mr-2 ${latest.isComplete ? 'bg-gray-400' : 'bg-green-400 animate-pulse'}`}></div>
+            {latest.isComplete ? 'Historical Data' : 'Live Streaming'} • 1H Candlesticks
+          </span>
           <span>
-            {orderBook ? `${orderBook.bids.length} bids • ${orderBook.asks.length} asks` : 'Loading...'}
+            {data.length} candles • {data.filter(d => !d.isComplete).length} live • Updated: {new Date().toLocaleTimeString()}
           </span>
         </div>
       </div>
     )
-  }
+  })
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -484,7 +795,7 @@ export default function DashboardPage() {
               </div>
               
               {/* Real-time Chart */}
-              <SimpleChart data={priceHistory} />
+              <CandlestickChart data={candleData} />
             </div>
           </div>
 

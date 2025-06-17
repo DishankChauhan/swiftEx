@@ -15,6 +15,7 @@ import { walletRoutes } from './routes/wallet.routes'
 import { externalWalletRoutes } from './routes/external-wallet.routes'
 import { marketDataRoutes } from './routes/market-data.routes'
 import { publicRoutes } from './routes/public.routes'
+import { analyticsRoutes } from './routes/analytics.routes'
 
 // Import services
 import { webSocketService } from './services/websocket.service'
@@ -155,6 +156,7 @@ const app = new Elysia()
   .use(externalWalletRoutes)
   .use(marketDataRoutes)
   .use(publicRoutes)
+  .use(analyticsRoutes)
 
   // WebSocket stats endpoint
   .get('/ws/stats', () => webSocketService.getStats())

@@ -34,31 +34,61 @@ class AnalyticsService {
     endTime?: number
   ): Promise<any[]> {
     try {
-      // For demo purposes, generate sample candle data
+      // Get current market price from Binance API
+      let currentPrice = 150; // Default fallback
+      try {
+        const response = await fetch('http://localhost:3001/public/prices');
+        const pricesData = await response.json();
+        if (pricesData.success && pricesData.data[tradingPair]) {
+          currentPrice = pricesData.data[tradingPair];
+        }
+      } catch (error) {
+        console.log('Failed to fetch current price, using default');
+      }
+
       const candles: any[] = []
       const now = endTime || Date.now()
       const intervalMs = this.intervalToMs(interval)
       
+      // Start from current price and work backwards
+      let lastClose = currentPrice;
+      
       for (let i = limit - 1; i >= 0; i--) {
         const timestamp = now - (i * intervalMs)
-        const basePrice = 150 + Math.random() * 50 // Random base price
-        const volatility = 0.02 // 2% volatility
+        const volatility = 0.005 // 0.5% volatility per candle
         
-        const open = basePrice * (1 + (Math.random() - 0.5) * volatility)
-        const close = open * (1 + (Math.random() - 0.5) * volatility)
-        const high = Math.max(open, close) * (1 + Math.random() * volatility / 2)
-        const low = Math.min(open, close) * (1 - Math.random() * volatility / 2)
-        const volume = 1000 + Math.random() * 9000
+        // Calculate price movement - smaller movements for more realistic data
+        const priceChange = (Math.random() - 0.5) * volatility * 2
+        const open = lastClose
+        const close = open * (1 + priceChange)
+        
+        // High and low based on open/close with some randomness
+        const highMultiplier = 1 + (Math.random() * volatility * 0.5)
+        const lowMultiplier = 1 - (Math.random() * volatility * 0.5)
+        
+        const high = Math.max(open, close) * highMultiplier
+        const low = Math.min(open, close) * lowMultiplier
+        
+        const volume = 500 + Math.random() * 2000 // More realistic volume
         
         candles.push({
           timestamp,
-          open: open.toFixed(2),
-          high: high.toFixed(2),
-          low: low.toFixed(2),
-          close: close.toFixed(2),
+          open: open.toFixed(6),
+          high: high.toFixed(6),
+          low: low.toFixed(6),
+          close: close.toFixed(6),
           volume: volume.toFixed(2),
-          trades: Math.floor(10 + Math.random() * 90)
+          trades: Math.floor(10 + Math.random() * 40)
         })
+        
+        // Update lastClose for next iteration (working backwards)
+        lastClose = close
+      }
+      
+      // Reverse to get chronological order and ensure latest candle has current price
+      candles.reverse()
+      if (candles.length > 0) {
+        candles[candles.length - 1].close = currentPrice.toFixed(6)
       }
       
       // Cache the candles
