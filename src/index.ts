@@ -122,7 +122,8 @@ const app = new Elysia()
   .use(marketMakerRoutes)
   
   // Global error handler
-  .onError(({ error, code, request }) => {
+  .onError((context) => {
+    const { error, code, request } = context;
     console.error('Server error:', {
       error: error.message,
       code,

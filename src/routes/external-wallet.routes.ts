@@ -1,14 +1,14 @@
 import { Elysia, t } from 'elysia';
-import { authGuard } from '../middleware/auth.middleware.js';
+import { authMiddleware } from '../middleware/auth.js';
 import { externalWalletService } from '../services/external-wallet.service.js';
 import { marketMakerService } from '../services/market-maker.service.js';
 
 export const externalWalletRoutes = new Elysia({ prefix: '/api/external-wallet' })
-  .use(authGuard)
 
   // Generate signature challenge for wallet verification
-  .post('/challenge', async ({ body, user }) => {
+  .post('/challenge', async ({ body, headers }) => {
     try {
+      const auth = await authMiddleware({ headers })
       const { address } = body;
       const message = externalWalletService.generateSignatureChallenge(address);
       
@@ -29,12 +29,13 @@ export const externalWalletRoutes = new Elysia({ prefix: '/api/external-wallet' 
   })
 
   // Connect external wallet
-  .post('/connect', async ({ body, user }) => {
+  .post('/connect', async ({ body, headers }) => {
     try {
+      const auth = await authMiddleware({ headers })
       const { address, chain, signature } = body;
       
       const connection = await externalWalletService.connectExternalWallet(
-        user.id,
+        auth.user.id,
         address,
         chain,
         signature
@@ -59,9 +60,10 @@ export const externalWalletRoutes = new Elysia({ prefix: '/api/external-wallet' 
   })
 
   // Get connected wallets
-  .get('/connected', async ({ user }) => {
+  .get('/connected', async ({ headers }) => {
     try {
-      const wallets = await externalWalletService.getUserConnectedWallets(user.id);
+      const auth = await authMiddleware({ headers })
+      const wallets = await externalWalletService.getUserConnectedWallets(auth.user.id);
       
       return {
         success: true,
@@ -76,11 +78,12 @@ export const externalWalletRoutes = new Elysia({ prefix: '/api/external-wallet' 
   })
 
   // Disconnect external wallet
-  .delete('/disconnect', async ({ body, user }) => {
+  .delete('/disconnect', async ({ body, headers }) => {
     try {
+      const auth = await authMiddleware({ headers })
       const { address } = body;
       
-      await externalWalletService.disconnectExternalWallet(user.id, address);
+      await externalWalletService.disconnectExternalWallet(auth.user.id, address);
       
       return {
         success: true,
@@ -99,10 +102,11 @@ export const externalWalletRoutes = new Elysia({ prefix: '/api/external-wallet' 
   })
 
   // Get deposit address for a chain
-  .get('/deposit-address/:chain', async ({ params, user }) => {
+  .get('/deposit-address/:chain', async ({ params, headers }) => {
     try {
+      const auth = await authMiddleware({ headers })
       const { chain } = params;
-      const address = await externalWalletService.getUserDepositAddress(user.id, chain as 'solana' | 'ethereum');
+      const address = await externalWalletService.getUserDepositAddress(auth.user.id, chain as 'solana' | 'ethereum');
       
       return {
         success: true,
@@ -121,12 +125,13 @@ export const externalWalletRoutes = new Elysia({ prefix: '/api/external-wallet' 
   })
 
   // Start monitoring deposits
-  .post('/monitor-deposit', async ({ body, user }) => {
+  .post('/monitor-deposit', async ({ body, headers }) => {
     try {
+      const auth = await authMiddleware({ headers })
       const { chain, userAddress, expectedAmount } = body;
       
       const monitorId = await externalWalletService.monitorDeposit(
-        user.id,
+        auth.user.id,
         chain,
         userAddress,
         expectedAmount
