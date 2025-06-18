@@ -1,6 +1,6 @@
 # 🚀 swiftEx 
 
-A high-performance centralized crypto spot exchange backend built with **Bun** and **Elysia.js**
+A high-performance centralized crypto spot exchange built with **Bun** and **Elysia.js**
 
 ![swiftEx architecture](https://github.com/user-attachments/assets/2a958335-a7ca-4c88-84df-b6622c01802e)
 
